@@ -184,9 +184,11 @@ async def test_diagnostics_redacted(hass):
 
 
 async def test_default_spacing_used_when_no_option(hass):
-    """Without an option the climate entity uses the 2.0 s default (start-to-start)."""
+    """Without an option the climate entity uses the 5.0 s default (start-to-start)."""
     import custom_components.msheireb.climate as cl
-    with patch.object(cl, "DEFAULT_PULSE_INTERVAL", 2.0):
+    from custom_components.msheireb.const import DEFAULT_PULSE_INTERVAL
+    assert DEFAULT_PULSE_INTERVAL == 5.0
+    with patch.object(cl, "DEFAULT_PULSE_INTERVAL", 5.0):
         entry, coord, api = await _setup(hass)
     sleeps = []
     real_sleep = cl.asyncio.sleep
@@ -196,4 +198,36 @@ async def test_default_spacing_used_when_no_option(hass):
         await real_sleep(0)
     with patch.object(cl.asyncio, "sleep", fake_sleep):
         await hass.services.async_call("climate", "set_temperature", {"entity_id": DINING, "temperature": 20.5}, blocking=True)
-    assert sleeps and all(1.5 < d <= 2.0 for d in sleeps)
+    assert sleeps and all(4.5 < d <= 5.0 for d in sleeps)
+
+
+async def test_confirm_timeout_scales_with_pulses(hass):
+    """4 presses at 5 s spacing -> window 4*5+20 = 40 s from the first press."""
+    entry, coord, api = await _setup(hass, options={"pulse_interval": 5.0})
+    FakeApi.ignore_commands = True
+    import custom_components.msheireb.climate as cl
+    real_sleep = cl.asyncio.sleep
+
+    async def fast_sleep(d):
+        await real_sleep(0)
+    with patch.object(cl.asyncio, "sleep", fast_sleep):
+        await hass.services.async_call("climate", "set_temperature",
+                                       {"entity_id": DINING, "temperature": 21.5}, blocking=True)  # 19.5 -> 21.5
+    rec = coord.health.commands["4242_501"]
+    assert len(rec.pulses) == 4 and rec.confirm_timeout == 40.0
+    s = st(hass, "sensor.msheireb_demo01_dining_room_last_command")
+    assert s.attributes["confirm_timeout_s"] == 40.0
+    rec.sent_monotonic -= 30  # 30 s: past the old fixed 20 s, inside the 40 s window
+    await coord.async_refresh(); await hass.async_block_till_done()
+    assert st(hass, "sensor.msheireb_demo01_dining_room_last_command").state == "pending"
+    assert not _notes(hass)
+    rec.sent_monotonic -= 11  # 41 s total
+    await coord.async_refresh(); await hass.async_block_till_done()
+    assert st(hass, "sensor.msheireb_demo01_dining_room_last_command").state == "not_confirmed"
+    assert "40 s" in next(iter(_notes(hass).values()))["message"]
+
+
+async def test_single_pulse_window_is_spacing_plus_20(hass):
+    entry, coord, api = await _setup(hass, options={"pulse_interval": 5.0})
+    await hass.services.async_call("climate", "set_fan_mode", {"entity_id": DINING, "fan_mode": "low"}, blocking=True)
+    assert coord.health.commands["4242_501"].confirm_timeout == 25.0

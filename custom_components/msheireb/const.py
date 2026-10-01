@@ -21,7 +21,7 @@ DEFAULT_SCAN_INTERVAL = 30  # seconds
 
 TEMP_STEP = 0.5  # one Temp Up/Down pulse = 0.5 C (measured: 1950 -> 2000)
 RAW_TEMP_SCALE = 100  # API reports C x 100
-PULSE_INTERVAL = 2.0  # default; see CONF_PULSE_INTERVAL
+PULSE_INTERVAL = 5.0  # default; see CONF_PULSE_INTERVAL
 PULSES_BETWEEN_READS = 3  # re-read setpoint every N pulses
 REFRESH_AFTER_COMMAND = 5.0  # seconds
 OPTIMISTIC_TIMEOUT = 25.0  # seconds before an unconfirmed optimistic value is dropped
@@ -46,9 +46,11 @@ FAN_ROLES = (ROLE_FAN_AUTO, ROLE_FAN_LOW, ROLE_FAN_MEDIUM, ROLE_FAN_HIGH)
 CONF_NOTIFICATIONS = "notifications"
 CONF_PULSE_INTERVAL = "pulse_interval"
 DEFAULT_NOTIFICATIONS = True
-DEFAULT_PULSE_INTERVAL = 2.0  # seconds between pulse sends (start-to-start); option range 0.5-5 s. Real AC also registered 1.2-1.5 s.
+DEFAULT_PULSE_INTERVAL = 5.0  # seconds between pulse sends (start-to-start); option range 0.5-10 s
+PULSE_INTERVAL_MIN = 0.5
+PULSE_INTERVAL_MAX = 10.0
 
-CONFIRM_TIMEOUT = 20.0  # seconds to confirm a command via polling
+CONFIRM_TIMEOUT = 20.0  # base seconds to confirm; effective = pulses x spacing + this
 ALERT_AFTER = 300.0  # seconds of controller-disconnected / portal-unreachable before notifying
 
 CMD_PENDING = "pending"

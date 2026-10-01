@@ -28,6 +28,8 @@ from .const import (
     DEFAULT_PULSE_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    PULSE_INTERVAL_MAX,
+    PULSE_INTERVAL_MIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -140,7 +142,7 @@ class MsheirebOptionsFlow(OptionsFlow):
                 ): vol.All(vol.Coerce(int), vol.Range(min=15, max=600)),
                 vol.Required(
                     CONF_PULSE_INTERVAL, default=opts.get(CONF_PULSE_INTERVAL, DEFAULT_PULSE_INTERVAL)
-                ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=5.0)),
+                ): vol.All(vol.Coerce(float), vol.Range(min=PULSE_INTERVAL_MIN, max=PULSE_INTERVAL_MAX)),
                 vol.Required(
                     CONF_NOTIFICATIONS, default=opts.get(CONF_NOTIFICATIONS, DEFAULT_NOTIFICATIONS)
                 ): bool,

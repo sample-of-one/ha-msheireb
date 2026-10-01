@@ -76,6 +76,7 @@ class CommandRecord:
     pulses: list[dict[str, Any]]
     started_at: datetime
     sent_monotonic: float
+    confirm_timeout: float = CONFIRM_TIMEOUT
     result: str = CMD_PENDING
     confirmed_after_s: float | None = None
     error: str | None = None
@@ -87,6 +88,7 @@ class CommandRecord:
             "pulses_sent": len(self.pulses),
             "sent": [f"{p['label']} (sn {p['sn']})" for p in self.pulses][:30],
             "sent_at": self.started_at.isoformat(),
+            "confirm_timeout_s": round(self.confirm_timeout, 1),
             "confirmed_after_s": self.confirmed_after_s,
             "error": self.error,
         }
@@ -310,7 +312,12 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         expected: dict[str, Any],
         pulses: list[dict[str, Any]],
         error: str | None = None,
+        started_monotonic: float | None = None,
+        spacing: float = 0.0,
     ) -> CommandRecord:
+        """Track a command. Timeout scales with the presses: pulses x spacing + CONFIRM_TIMEOUT,
+        measured from the first press."""
+        now = time.monotonic()
         rec = CommandRecord(
             zone_key=zone.key,
             room=zone.room_name,
@@ -318,7 +325,8 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
             expected=expected,
             pulses=pulses,
             started_at=dt_util.utcnow(),
-            sent_monotonic=time.monotonic(),
+            sent_monotonic=started_monotonic if started_monotonic is not None else now,
+            confirm_timeout=len(pulses) * max(0.0, spacing) + CONFIRM_TIMEOUT,
         )
         self.health.commands[zone.key] = rec
         if error is not None:
@@ -335,7 +343,8 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                 self._cancel_confirm.pop(zone.key, None)
                 self.hass.async_create_task(self.async_refresh())
 
-            self._cancel_confirm[zone.key] = async_call_later(self.hass, CONFIRM_TIMEOUT + 1, _timeout)
+            remaining = max(0.0, rec.sent_monotonic + rec.confirm_timeout - now)
+            self._cancel_confirm[zone.key] = async_call_later(self.hass, remaining + 1, _timeout)
         self.notify_health()
         return rec
 
@@ -367,13 +376,13 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                 self.alerts.clear(f"command_{key}")
                 if key in self._cancel_confirm:
                     self._cancel_confirm.pop(key)()
-            elif now - rec.sent_monotonic >= CONFIRM_TIMEOUT:
+            elif now - rec.sent_monotonic >= rec.confirm_timeout:
                 rec.result = CMD_NOT_CONFIRMED
                 self.health.commands_failed += 1
                 self._alert_command(rec)
 
     def _alert_command(self, rec: CommandRecord) -> None:
-        detail = f"error: {rec.error}" if rec.error else f"not confirmed within {int(CONFIRM_TIMEOUT)} s"
+        detail = f"error: {rec.error}" if rec.error else f"not confirmed within {int(rec.confirm_timeout)} s"
         self.alerts.raise_(
             f"command_{rec.zone_key}",
             f"Msheireb: AC command not applied ({rec.room})",

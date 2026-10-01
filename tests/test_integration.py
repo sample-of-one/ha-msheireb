@@ -153,27 +153,27 @@ async def test_options_flow_reloads_with_new_limits(hass):
     entry, _ = await _setup(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"min_temp": 20, "max_temp": 26, "scan_interval": 60, "pulse_interval": 2.0, "notifications": True})
+        result["flow_id"], {"min_temp": 20, "max_temp": 26, "scan_interval": 60, "pulse_interval": 5.0, "notifications": True})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     s = hass.states.get("climate.msheireb_demo01_dining_room")
     assert s.attributes["min_temp"] == 20 and s.attributes["max_temp"] == 26
 
 
-async def test_default_pulse_spacing_and_option_range(hass):
+async def test_default_pulse_spacing_and_option_range(hass):  # 5.0 default, 0.5-10 range
     import voluptuous as vol
     from custom_components.msheireb.const import DEFAULT_PULSE_INTERVAL
-    assert DEFAULT_PULSE_INTERVAL == 2.0
+    assert DEFAULT_PULSE_INTERVAL == 5.0
     entry, _ = await _setup(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     schema = result["data_schema"].schema
     key = next(k for k in schema if k == "pulse_interval")
-    assert key.default() == 2.0
-    for bad in (0.4, 5.1):
+    assert key.default() == 5.0
+    for bad in (0.4, 10.1):
         with pytest.raises(vol.Invalid):
             result["data_schema"]({"min_temp": 18, "max_temp": 30, "scan_interval": 30,
                                    "pulse_interval": bad, "notifications": True})
     result["data_schema"]({"min_temp": 18, "max_temp": 30, "scan_interval": 30,
                            "pulse_interval": 0.5, "notifications": True})
     result["data_schema"]({"min_temp": 18, "max_temp": 30, "scan_interval": 30,
-                           "pulse_interval": 5.0, "notifications": True})
+                           "pulse_interval": 10.0, "notifications": True})

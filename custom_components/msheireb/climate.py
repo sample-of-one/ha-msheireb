@@ -140,7 +140,9 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
                 "fan": zone.fan_mode(self._fan_roles),
             }
             for name, (value, ts) in list(self._optimistic.items()):
-                if actual.get(name) == value or now - ts > OPTIMISTIC_TIMEOUT:
+                if actual.get(name) == value or (
+                    now - ts > OPTIMISTIC_TIMEOUT and not self._lock.locked()  # keep while pulses run
+                ):
                     self._optimistic.pop(name, None)
         super()._handle_coordinator_update()
 
@@ -191,13 +193,20 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
     async def _run_command(self, zone: HvacZone, description: str, expected: dict[str, Any], body) -> None:
         """Run pulses via body(sent_list); track the result for monitoring."""
         sent: list[dict[str, Any]] = []
+        started = time.monotonic()
         try:
             await body(sent)
         except MsheirebError as err:
-            self.coordinator.track_command(zone, description, expected, sent, error=str(err))
+            self.coordinator.track_command(
+                zone, description, expected, sent, error=str(err),
+                started_monotonic=started, spacing=self._pulse_interval,
+            )
             raise HomeAssistantError(f"{self.name}: command failed: {err}") from err
         if sent:
-            self.coordinator.track_command(zone, description, expected, sent)
+            self.coordinator.track_command(
+                zone, description, expected, sent,
+                started_monotonic=started, spacing=self._pulse_interval,
+            )
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if hvac_mode not in (HVACMode.OFF, HVACMode.COOL):
