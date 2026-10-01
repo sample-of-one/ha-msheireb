@@ -153,7 +153,7 @@ async def test_options_flow_reloads_with_new_limits(hass):
     entry, _ = await _setup(hass)
     result = await hass.config_entries.options.async_init(entry.entry_id)
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"min_temp": 20, "max_temp": 26, "scan_interval": 60, "pulse_interval": 5.0, "notifications": True})
+        result["flow_id"], {"min_temp": 20, "max_temp": 26, "scan_interval": 60, "pulse_interval": 5.0, "max_retries": 2, "notifications": True})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     s = hass.states.get("climate.msheireb_demo01_dining_room")
@@ -172,8 +172,8 @@ async def test_default_pulse_spacing_and_option_range(hass):  # 5.0 default, 0.5
     for bad in (0.4, 10.1):
         with pytest.raises(vol.Invalid):
             result["data_schema"]({"min_temp": 18, "max_temp": 30, "scan_interval": 30,
-                                   "pulse_interval": bad, "notifications": True})
+                                   "pulse_interval": bad, "max_retries": 2, "notifications": True})
     result["data_schema"]({"min_temp": 18, "max_temp": 30, "scan_interval": 30,
-                           "pulse_interval": 0.5, "notifications": True})
+                           "pulse_interval": 0.5, "max_retries": 2, "notifications": True})
     result["data_schema"]({"min_temp": 18, "max_temp": 30, "scan_interval": 30,
-                           "pulse_interval": 10.0, "notifications": True})
+                           "pulse_interval": 10.0, "max_retries": 0, "notifications": True})

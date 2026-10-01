@@ -11,6 +11,7 @@ class FakeApi:
     fail_login = None  # exception to raise on login
     fail_fetch = None  # exception to raise on data fetch
     ignore_commands = False  # simulate presses the AC never registers
+    drop_pulses = 0  # drop the next N presses (simulate missed presses)
 
     def __init__(self, session, email, password, access_token=None, refresh_token=None,
                  expires_at=None, token_callback=None, status_callback=None):
@@ -61,6 +62,9 @@ class FakeApi:
         self.commands.append({"ip": ip, "sn": sn, "type_io": type_io, "type_code": type_code, "value": value})
         dev, label = self._device(sn, type_code)
         if FakeApi.ignore_commands:
+            return {"ok": True}
+        if FakeApi.drop_pulses > 0:
+            FakeApi.drop_pulses -= 1
             return {"ok": True}
         an = {a["label"]: a for a in dev["status"]["analog"]}
         dg = {d["label"]: d for d in dev["status"]["digital"]}

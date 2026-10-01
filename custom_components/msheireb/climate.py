@@ -28,13 +28,12 @@ from .const import (
     OPTIMISTIC_TIMEOUT,
     CONF_PULSE_INTERVAL,
     DEFAULT_PULSE_INTERVAL,
-    PULSES_BETWEEN_READS,
     ROLE_POWER,
     ROLE_TEMP_DOWN,
     ROLE_TEMP_UP,
     TEMP_STEP,
 )
-from .coordinator import MsheirebCoordinator
+from .coordinator import KIND_FAN, KIND_POWER, KIND_TARGET, MsheirebCoordinator
 from .entity import MsheirebEntity
 from .models import HvacZone
 
@@ -187,26 +186,12 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             raise HomeAssistantError(f"{self.name}: controller not available")
         return zone
 
-    async def _pulse(self, zone: HvacZone, role: str, sent: list[dict[str, Any]]) -> None:
-        sent.append(await self.coordinator.async_pulse(zone, role))
-
-    async def _run_command(self, zone: HvacZone, description: str, expected: dict[str, Any], body) -> None:
-        """Run pulses via body(sent_list); track the result for monitoring."""
-        sent: list[dict[str, Any]] = []
-        started = time.monotonic()
+    async def _command(self, zone: HvacZone, kind: str, value: Any, description: str) -> None:
+        """Execute via the coordinator (which tracks, confirms and retries)."""
         try:
-            await body(sent)
+            await self.coordinator.async_command(zone, kind, value, description, self._pulse_interval)
         except MsheirebError as err:
-            self.coordinator.track_command(
-                zone, description, expected, sent, error=str(err),
-                started_monotonic=started, spacing=self._pulse_interval,
-            )
             raise HomeAssistantError(f"{self.name}: command failed: {err}") from err
-        if sent:
-            self.coordinator.track_command(
-                zone, description, expected, sent,
-                started_monotonic=started, spacing=self._pulse_interval,
-            )
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if hvac_mode not in (HVACMode.OFF, HVACMode.COOL):
@@ -220,12 +205,8 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
                 self._optimistic.pop("power", None)
                 self.async_write_ha_state()
                 return
-
-            async def body(sent: list[dict[str, Any]]) -> None:
-                # Power is a toggle pulse; only sent when the reported state differs.
-                await self._pulse(zone, ROLE_POWER, sent)
-
-            await self._run_command(zone, f"set_hvac_mode {hvac_mode}", {"power": want_on}, body)
+            # Power is a toggle pulse; only sent when the reported state differs.
+            await self._command(zone, KIND_POWER, want_on, f"set_hvac_mode {hvac_mode}")
             self._set_opt("power", want_on)
         self.coordinator.schedule_refresh_after_command()
 
@@ -244,11 +225,7 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
                 self._optimistic.pop("fan", None)
                 self.async_write_ha_state()
                 return
-
-            async def body(sent: list[dict[str, Any]]) -> None:
-                await self._pulse(zone, fan_mode, sent)
-
-            await self._run_command(zone, f"set_fan_mode {fan_mode}", {"fan": fan_mode}, body)
+            await self._command(zone, KIND_FAN, fan_mode, f"set_fan_mode {fan_mode}")
             self._set_opt("fan", fan_mode)
         self.coordinator.schedule_refresh_after_command()
 
@@ -272,30 +249,5 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             if role not in zone.controls:
                 raise HomeAssistantError(f"{self.name}: no {role} control")
             self._set_opt("target", target)
-            cap = abs(needed)  # never send more pulses than initially needed
-
-            async def body(sent: list[dict[str, Any]]) -> None:
-                nonlocal zone
-                remaining = cap
-                while remaining > 0 and len(sent) < cap:
-                    t_start = time.monotonic()
-                    await self._pulse(zone, role, sent)
-                    remaining -= 1
-                    if remaining <= 0:
-                        break
-                    # spacing measured start-to-start (request time counts towards it)
-                    await asyncio.sleep(max(0.0, self._pulse_interval - (time.monotonic() - t_start)))
-                    if len(sent) % PULSES_BETWEEN_READS == 0:
-                        fresh = await self.coordinator.async_read_zone(zone)
-                        if fresh is not None and fresh.setpoint is not None:
-                            zone = fresh
-                            left = round((target - fresh.setpoint) / TEMP_STEP)
-                            if left == 0 or (left > 0) != (needed > 0):
-                                break  # reached or overshot
-                            remaining = min(abs(left), cap - len(sent))
-
-            await self._run_command(
-                zone, f"set_temperature {current:.1f} -> {target:.1f}", {"target": target}, body
-            )
-            _LOGGER.debug("%s: %s pulse(s) towards %.1f", self.name, role, target)
+            await self._command(zone, KIND_TARGET, target, f"set_temperature {current:.1f} -> {target:.1f}")
         self.coordinator.schedule_refresh_after_command()

@@ -37,8 +37,9 @@
           "min_temp": "Minimum target temperature (°C)",
           "max_temp": "Maximum target temperature (°C)",
           "scan_interval": "Polling interval (seconds)",
-          "pulse_interval": "Pulse spacing (seconds between Temp Up/Down presses)",
-          "notifications": "Show notifications (login failure, controller/portal offline, unconfirmed commands)"
+          "pulse_interval": "Pulse spacing in seconds between Temp Up/Down presses (0.5–10)",
+          "notifications": "Show notifications (login failure, controller/portal offline, unconfirmed commands)",
+          "max_retries": "Automatic retries for unconfirmed commands (0 = off)"
         }
       }
     },
@@ -103,6 +104,9 @@
           "not_confirmed": "Not confirmed",
           "failed": "Failed"
         }
+      },
+      "command_retries": {
+        "name": "Command retries"
       }
     }
   },

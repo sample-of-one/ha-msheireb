@@ -27,6 +27,7 @@ def fake_api(smart_home_payload):
     FakeApi.controller = "connected"
     FakeApi.fail_login = FakeApi.fail_fetch = None
     FakeApi.ignore_commands = False
+    FakeApi.drop_pulses = 0
     with patch("custom_components.msheireb.MsheirebApi", FakeApi), \
          patch("custom_components.msheireb.climate.DEFAULT_PULSE_INTERVAL", 0), \
          patch("custom_components.msheireb.coordinator.REFRESH_AFTER_COMMAND", 0):
@@ -79,7 +80,7 @@ async def test_command_confirmed_and_counters(hass):
 
 
 async def test_command_not_confirmed_notifies_then_clears(hass):
-    entry, coord, api = await _setup(hass)
+    entry, coord, api = await _setup(hass, options={"max_retries": 0})
     FakeApi.ignore_commands = True
     await hass.services.async_call("climate", "set_fan_mode", {"entity_id": DINING, "fan_mode": "low"}, blocking=True)
     coord.health.commands["4242_501"].sent_monotonic -= 30  # pretend 30 s passed
@@ -203,7 +204,7 @@ async def test_default_spacing_used_when_no_option(hass):
 
 async def test_confirm_timeout_scales_with_pulses(hass):
     """4 presses at 5 s spacing -> window 4*5+20 = 40 s from the first press."""
-    entry, coord, api = await _setup(hass, options={"pulse_interval": 5.0})
+    entry, coord, api = await _setup(hass, options={"pulse_interval": 5.0, "max_retries": 0})
     FakeApi.ignore_commands = True
     import custom_components.msheireb.climate as cl
     real_sleep = cl.asyncio.sleep
@@ -231,3 +232,133 @@ async def test_single_pulse_window_is_spacing_plus_20(hass):
     entry, coord, api = await _setup(hass, options={"pulse_interval": 5.0})
     await hass.services.async_call("climate", "set_fan_mode", {"entity_id": DINING, "fan_mode": "low"}, blocking=True)
     assert coord.health.commands["4242_501"].confirm_timeout == 25.0
+
+
+
+# ------------------------------------------------------------------ retries
+LAST = "sensor.msheireb_demo01_dining_room_last_command"
+
+
+async def _expire(hass, coord, key="4242_501", extra=1.0):
+    rec = coord.health.commands[key]
+    rec.sent_monotonic -= rec.confirm_timeout + extra
+    await coord.async_refresh()
+    await hass.async_block_till_done()
+    return rec
+
+
+async def test_temperature_retry_sends_only_missing_pulses(hass):
+    entry, coord, api = await _setup(hass)
+    FakeApi.drop_pulses = 2  # AC misses 2 of 3 presses: 19.5 -> 20.0 instead of 21.0
+    await hass.services.async_call("climate", "set_temperature", {"entity_id": DINING, "temperature": 21.0}, blocking=True)
+    assert [c["sn"] for c in api.commands] == [6, 6, 6]
+    await coord.async_refresh(); await hass.async_block_till_done()
+    assert st(hass, LAST).state == "pending"  # 20.0 != 21.0, window not over
+    api.commands.clear()
+    rec = await _expire(hass, coord)
+    assert [c["sn"] for c in api.commands] == [6, 6]  # remaining delta from actual 20.0 only
+    assert rec.retries == 1 and rec.confirm_timeout == 20.0  # spacing 0 in tests: 2*0+20
+    await coord.async_refresh(); await hass.async_block_till_done()
+    s = st(hass, LAST)
+    assert s.state == "confirmed" and s.attributes["retries"] == 1 and s.attributes["pulses_sent"] == 5
+    assert st(hass, "sensor.msheireb_portal_command_retries").state == "1"
+    assert st(hass, "sensor.msheireb_portal_commands_failed").state == "0"
+    assert not _notes(hass)
+
+
+async def test_retry_window_scales_with_retry_pulses(hass):
+    entry, coord, api = await _setup(hass, options={"pulse_interval": 5.0})
+    import custom_components.msheireb.climate as cl
+    real_sleep = cl.asyncio.sleep
+
+    async def fast_sleep(d):
+        await real_sleep(0)
+    FakeApi.drop_pulses = 3
+    with patch.object(cl.asyncio, "sleep", fast_sleep):
+        await hass.services.async_call("climate", "set_temperature", {"entity_id": DINING, "temperature": 21.0}, blocking=True)
+        rec = coord.health.commands["4242_501"]
+        assert rec.confirm_timeout == 35.0  # 3*5+20
+        FakeApi.drop_pulses = 1  # retry: 1 of 3 missed
+        await _expire(hass, coord)
+        assert rec.retries == 1 and rec.confirm_timeout == 35.0  # 3 retry presses
+        await _expire(hass, coord)  # second retry: only 1 press missing
+        assert rec.retries == 2 and rec.confirm_timeout == 25.0  # 1*5+20
+    await coord.async_refresh(); await hass.async_block_till_done()
+    assert st(hass, LAST).state == "confirmed"
+
+
+async def test_power_retry_never_blindly_toggles(hass):
+    entry, coord, api = await _setup(hass)
+    FakeApi.drop_pulses = 1
+    await hass.services.async_call("climate", "turn_off", {"entity_id": DINING}, blocking=True)
+    assert [c["sn"] for c in api.commands] == [1]
+    # meanwhile the AC was switched off at the wall panel
+    for d in api.state["rooms"][0]["devices"][0]["status"]["digital"]:
+        if d["label"] == "HVAC AC":
+            d["current_status"] = "OFF"
+    api.commands.clear()
+    # expire without a poll first seeing it (simulate by expiring directly via retry path)
+    rec = coord.health.commands["4242_501"]
+    rec.sent_monotonic -= rec.confirm_timeout + 1
+    await coord._async_retry(rec)
+    assert api.commands == []  # state already matches -> no toggle
+    assert rec.result == "confirmed" and rec.retries == 0
+
+
+async def test_power_retry_resends_when_still_different(hass):
+    entry, coord, api = await _setup(hass)
+    FakeApi.drop_pulses = 1
+    await hass.services.async_call("climate", "turn_off", {"entity_id": DINING}, blocking=True)
+    api.commands.clear()
+    rec = await _expire(hass, coord)
+    assert [c["sn"] for c in api.commands] == [1] and rec.retries == 1
+    await coord.async_refresh(); await hass.async_block_till_done()
+    assert st(hass, LAST).state == "confirmed"
+    assert st(hass, DINING).state == "off"
+
+
+async def test_fan_retry(hass):
+    entry, coord, api = await _setup(hass)
+    FakeApi.drop_pulses = 1
+    await hass.services.async_call("climate", "set_fan_mode", {"entity_id": DINING, "fan_mode": "low"}, blocking=True)
+    api.commands.clear()
+    await _expire(hass, coord)
+    assert [c["sn"] for c in api.commands] == [3]
+    await coord.async_refresh(); await hass.async_block_till_done()
+    assert st(hass, LAST).state == "confirmed"
+
+
+async def test_final_failure_only_after_last_retry(hass):
+    entry, coord, api = await _setup(hass)  # default max_retries = 2
+    FakeApi.ignore_commands = True
+    await hass.services.async_call("climate", "set_fan_mode", {"entity_id": DINING, "fan_mode": "low"}, blocking=True)
+    await _expire(hass, coord)
+    assert st(hass, LAST).state == "pending" and not _notes(hass)
+    await _expire(hass, coord)
+    assert st(hass, LAST).state == "pending" and not _notes(hass)
+    rec = await _expire(hass, coord)
+    s = st(hass, LAST)
+    assert s.state == "not_confirmed" and s.attributes["retries"] == 2 and s.attributes["pulses_sent"] == 3
+    assert st(hass, "sensor.msheireb_portal_command_retries").state == "2"
+    assert st(hass, "sensor.msheireb_portal_commands_failed").state == "1"
+    notes = _notes(hass)
+    assert len(notes) == 1 and "2 retries" in next(iter(notes.values()))["message"]
+
+
+async def test_newer_command_supersedes_retry(hass):
+    entry, coord, api = await _setup(hass)
+    FakeApi.ignore_commands = True
+    await hass.services.async_call("climate", "set_fan_mode", {"entity_id": DINING, "fan_mode": "low"}, blocking=True)
+    old = coord.health.commands["4242_501"]
+    FakeApi.ignore_commands = False
+    await hass.services.async_call("climate", "set_fan_mode", {"entity_id": DINING, "fan_mode": "medium"}, blocking=True)
+    api.commands.clear()
+    await coord._async_retry(old)
+    assert api.commands == []  # old command no longer current
+
+
+async def test_max_retries_option_in_flow(hass):
+    entry, coord, api = await _setup(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    key = next(k for k in result["data_schema"].schema if k == "max_retries")
+    assert key.default() == 2

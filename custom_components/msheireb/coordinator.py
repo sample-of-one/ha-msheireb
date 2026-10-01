@@ -32,17 +32,28 @@ from .const import (
     CMD_FAILED,
     CMD_NOT_CONFIRMED,
     CMD_PENDING,
+    CONF_MAX_RETRIES,
     CONF_SCAN_INTERVAL,
     CONFIRM_TIMEOUT,
+    DEFAULT_MAX_RETRIES,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     FAN_ROLES,
     PULSE_VALUE,
+    PULSES_BETWEEN_READS,
     REFRESH_AFTER_COMMAND,
+    ROLE_POWER,
+    ROLE_TEMP_DOWN,
+    ROLE_TEMP_UP,
+    TEMP_STEP,
 )
 from .models import HvacZone, parse_smart_home
 
 _LOGGER = logging.getLogger(__name__)
+
+KIND_TARGET = "target"
+KIND_POWER = "power"
+KIND_FAN = "fan"
 
 
 @dataclass
@@ -77,6 +88,13 @@ class CommandRecord:
     started_at: datetime
     sent_monotonic: float
     confirm_timeout: float = CONFIRM_TIMEOUT
+    kind: str | None = None
+    value: Any = None
+    spacing: float = 0.0
+    contract_id: int | None = None
+    first_monotonic: float | None = None
+    retries: int = 0
+    retrying: bool = False
     result: str = CMD_PENDING
     confirmed_after_s: float | None = None
     error: str | None = None
@@ -89,6 +107,7 @@ class CommandRecord:
             "sent": [f"{p['label']} (sn {p['sn']})" for p in self.pulses][:30],
             "sent_at": self.started_at.isoformat(),
             "confirm_timeout_s": round(self.confirm_timeout, 1),
+            "retries": self.retries,
             "confirmed_after_s": self.confirmed_after_s,
             "error": self.error,
         }
@@ -107,6 +126,7 @@ class Health:
     commands_sent: int = 0
     commands_confirmed: int = 0
     commands_failed: int = 0
+    command_retries: int = 0
     controller_down_since: dict[int, float] = field(default_factory=dict)  # monotonic
     commands: dict[str, CommandRecord] = field(default_factory=dict)  # zone_key -> last
 
@@ -314,6 +334,8 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         error: str | None = None,
         started_monotonic: float | None = None,
         spacing: float = 0.0,
+        kind: str | None = None,
+        value: Any = None,
     ) -> CommandRecord:
         """Track a command. Timeout scales with the presses: pulses x spacing + CONFIRM_TIMEOUT,
         measured from the first press."""
@@ -327,7 +349,12 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
             started_at=dt_util.utcnow(),
             sent_monotonic=started_monotonic if started_monotonic is not None else now,
             confirm_timeout=len(pulses) * max(0.0, spacing) + CONFIRM_TIMEOUT,
+            kind=kind,
+            value=value,
+            spacing=spacing,
+            contract_id=zone.contract_id,
         )
+        rec.first_monotonic = rec.sent_monotonic
         self.health.commands[zone.key] = rec
         if error is not None:
             rec.result = CMD_FAILED
@@ -335,18 +362,141 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
             self.health.commands_failed += 1
             self._alert_command(rec)
         else:
-            if zone.key in self._cancel_confirm:
-                self._cancel_confirm.pop(zone.key)()
-
-            @callback
-            def _timeout(_now: Any) -> None:
-                self._cancel_confirm.pop(zone.key, None)
-                self.hass.async_create_task(self.async_refresh())
-
-            remaining = max(0.0, rec.sent_monotonic + rec.confirm_timeout - now)
-            self._cancel_confirm[zone.key] = async_call_later(self.hass, remaining + 1, _timeout)
+            self._schedule_confirm_check(rec)
         self.notify_health()
         return rec
+
+    @callback
+    def _schedule_confirm_check(self, rec: CommandRecord) -> None:
+        key = rec.zone_key
+        if key in self._cancel_confirm:
+            self._cancel_confirm.pop(key)()
+
+        @callback
+        def _timeout(_now: Any) -> None:
+            self._cancel_confirm.pop(key, None)
+            self.hass.async_create_task(self.async_refresh())
+
+        remaining = max(0.0, rec.sent_monotonic + rec.confirm_timeout - time.monotonic())
+        self._cancel_confirm[key] = async_call_later(self.hass, remaining + 1, _timeout)
+
+    @property
+    def max_retries(self) -> int:
+        return int(self.config_entry.options.get(CONF_MAX_RETRIES, DEFAULT_MAX_RETRIES))
+
+    # ---------------------------------------------------------------- execution
+    async def _execute(
+        self, zone: HvacZone, kind: str, value: Any, spacing: float, sent: list[dict[str, Any]]
+    ) -> None:
+        """Send only the pulses needed to move `zone` from its current state to `value`."""
+        if kind == KIND_POWER:
+            if zone.power is not value:  # never blindly toggle
+                sent.append(await self.async_pulse(zone, ROLE_POWER))
+            return
+        if kind == KIND_FAN:
+            if zone.fan_mode(FAN_ROLES) != value:
+                sent.append(await self.async_pulse(zone, value))
+            return
+        if kind != KIND_TARGET:
+            raise MsheirebError(f"unknown command kind {kind}")
+        if zone.setpoint is None:
+            raise MsheirebError(f"{zone.room_name}: current setpoint unknown")
+        needed = round((value - zone.setpoint) / TEMP_STEP)
+        if needed == 0:
+            return
+        role = ROLE_TEMP_UP if needed > 0 else ROLE_TEMP_DOWN
+        cap = abs(needed)  # never send more pulses than needed for this attempt
+        remaining = cap
+        count = 0
+        while remaining > 0 and count < cap:
+            t_start = time.monotonic()
+            sent.append(await self.async_pulse(zone, role))
+            count += 1
+            remaining -= 1
+            if remaining <= 0:
+                break
+            # spacing measured start-to-start (request time counts towards it)
+            await asyncio.sleep(max(0.0, spacing - (time.monotonic() - t_start)))
+            if count % PULSES_BETWEEN_READS == 0:
+                fresh = await self.async_read_zone(zone)
+                if fresh is not None and fresh.setpoint is not None:
+                    zone = fresh
+                    left = round((value - fresh.setpoint) / TEMP_STEP)
+                    if left == 0 or (left > 0) != (needed > 0):
+                        break  # reached or overshot
+                    remaining = min(abs(left), cap - count)
+
+    async def async_command(
+        self, zone: HvacZone, kind: str, value: Any, description: str, spacing: float
+    ) -> list[dict[str, Any]]:
+        """Execute + track a user command. Caller holds the contract command lock."""
+        sent: list[dict[str, Any]] = []
+        started = time.monotonic()
+        expected = {kind: value}
+        try:
+            await self._execute(zone, kind, value, spacing, sent)
+        except MsheirebError as err:
+            self.track_command(zone, description, expected, sent, error=str(err),
+                               started_monotonic=started, spacing=spacing, kind=kind, value=value)
+            raise
+        if sent:
+            self.track_command(zone, description, expected, sent,
+                               started_monotonic=started, spacing=spacing, kind=kind, value=value)
+        return sent
+
+    async def _async_retry(self, rec: CommandRecord) -> None:
+        """Re-read the actual state and send only what is still needed."""
+        try:
+            async with self.command_lock(rec.contract_id or 0):
+                if self.health.commands.get(rec.zone_key) is not rec or rec.result != CMD_PENDING:
+                    return  # superseded by a newer command
+                cd = (self.data or {}).get(rec.contract_id)
+                zone = cd.zones.get(rec.zone_key) if cd else None
+                if zone is None:
+                    raise MsheirebError("zone no longer available")
+                fresh = await self.async_read_zone(zone) or zone
+                if self._zone_matches(fresh, rec.expected):
+                    self._confirm(rec)
+                    return
+                rec.retries += 1
+                self.health.command_retries += 1
+                new: list[dict[str, Any]] = []
+                started = time.monotonic()
+                try:
+                    await self._execute(fresh, rec.kind, rec.value, rec.spacing, new)
+                finally:
+                    rec.pulses.extend(new)
+                if not new:
+                    # nothing to send, yet state differs (e.g. unknown setpoint): treat as final
+                    self._fail(rec, None)
+                    return
+                rec.sent_monotonic = started
+                rec.confirm_timeout = len(new) * max(0.0, rec.spacing) + CONFIRM_TIMEOUT
+                _LOGGER.debug("Retry %s for %s: sent %s pulse(s)", rec.retries, rec.room, len(new))
+                self._schedule_confirm_check(rec)
+        except MsheirebError as err:
+            rec.result = CMD_FAILED
+            rec.error = str(err)
+            self.health.commands_failed += 1
+            self._alert_command(rec)
+        finally:
+            rec.retrying = False
+            self.notify_health()
+        self.schedule_refresh_after_command()
+
+    def _confirm(self, rec: CommandRecord) -> None:
+        rec.result = CMD_CONFIRMED
+        rec.confirmed_after_s = round(time.monotonic() - (rec.first_monotonic or rec.sent_monotonic), 1)
+        self.health.commands_confirmed += 1
+        self.alerts.clear(f"command_{rec.zone_key}")
+        if rec.zone_key in self._cancel_confirm:
+            self._cancel_confirm.pop(rec.zone_key)()
+
+    def _fail(self, rec: CommandRecord, error: str | None) -> None:
+        rec.result = CMD_NOT_CONFIRMED
+        rec.error = error
+        self.health.commands_failed += 1
+        self._alert_command(rec)
 
     @staticmethod
     def _zone_matches(zone: HvacZone, expected: dict[str, Any]) -> bool:
@@ -366,23 +516,26 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         now = time.monotonic()
         zones = {k: z for cd in data.values() for k, z in cd.zones.items()}
         for key, rec in self.health.commands.items():
-            if rec.result != CMD_PENDING:
+            if rec.result != CMD_PENDING or rec.retrying:
                 continue
             zone = zones.get(key)
             if zone is not None and self._zone_matches(zone, rec.expected):
-                rec.result = CMD_CONFIRMED
-                rec.confirmed_after_s = round(now - rec.sent_monotonic, 1)
-                self.health.commands_confirmed += 1
-                self.alerts.clear(f"command_{key}")
-                if key in self._cancel_confirm:
-                    self._cancel_confirm.pop(key)()
+                self._confirm(rec)
             elif now - rec.sent_monotonic >= rec.confirm_timeout:
-                rec.result = CMD_NOT_CONFIRMED
-                self.health.commands_failed += 1
-                self._alert_command(rec)
+                if rec.kind and rec.retries < self.max_retries:
+                    rec.retrying = True
+                    self.config_entry.async_create_task(
+                        self.hass, self._async_retry(rec), f"{DOMAIN}_retry_{key}"
+                    )
+                else:
+                    self._fail(rec, None)
 
     def _alert_command(self, rec: CommandRecord) -> None:
-        detail = f"error: {rec.error}" if rec.error else f"not confirmed within {int(rec.confirm_timeout)} s"
+        detail = (
+            f"error: {rec.error}"
+            if rec.error
+            else f"not confirmed within {int(rec.confirm_timeout)} s after {rec.retries} retr{'y' if rec.retries == 1 else 'ies'}"
+        )
         self.alerts.raise_(
             f"command_{rec.zone_key}",
             f"Msheireb: AC command not applied ({rec.room})",

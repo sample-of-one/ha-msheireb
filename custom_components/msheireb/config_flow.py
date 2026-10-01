@@ -16,18 +16,21 @@ from .api import MsheirebApi, MsheirebAuthError, MsheirebError
 from .const import (
     CONF_ACCESS_TOKEN,
     CONF_EXPIRES_AT,
+    CONF_MAX_RETRIES,
     CONF_MAX_TEMP,
     CONF_MIN_TEMP,
     CONF_NOTIFICATIONS,
     CONF_PULSE_INTERVAL,
     CONF_REFRESH_TOKEN,
     CONF_SCAN_INTERVAL,
+    DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_TEMP,
     DEFAULT_MIN_TEMP,
     DEFAULT_NOTIFICATIONS,
     DEFAULT_PULSE_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    MAX_RETRIES_LIMIT,
     PULSE_INTERVAL_MAX,
     PULSE_INTERVAL_MIN,
 )
@@ -143,6 +146,9 @@ class MsheirebOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_PULSE_INTERVAL, default=opts.get(CONF_PULSE_INTERVAL, DEFAULT_PULSE_INTERVAL)
                 ): vol.All(vol.Coerce(float), vol.Range(min=PULSE_INTERVAL_MIN, max=PULSE_INTERVAL_MAX)),
+                vol.Required(
+                    CONF_MAX_RETRIES, default=opts.get(CONF_MAX_RETRIES, DEFAULT_MAX_RETRIES)
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=MAX_RETRIES_LIMIT)),
                 vol.Required(
                     CONF_NOTIFICATIONS, default=opts.get(CONF_NOTIFICATIONS, DEFAULT_NOTIFICATIONS)
                 ): bool,

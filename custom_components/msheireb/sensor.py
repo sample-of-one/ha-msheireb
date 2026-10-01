@@ -93,6 +93,9 @@ SENSORS: tuple[HealthSensorDef, ...] = (
         "commands_confirmed", lambda c: c.health.commands_confirmed, state_class=SensorStateClass.TOTAL_INCREASING
     ),
     HealthSensorDef(
+        "command_retries", lambda c: c.health.command_retries, state_class=SensorStateClass.TOTAL_INCREASING
+    ),
+    HealthSensorDef(
         "commands_failed", lambda c: c.health.commands_failed, state_class=SensorStateClass.TOTAL_INCREASING
     ),
 )
