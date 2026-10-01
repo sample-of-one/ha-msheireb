@@ -90,7 +90,9 @@ CMD_PENDING = "pending"
 CMD_CONFIRMED = "confirmed"
 CMD_NOT_CONFIRMED = "not_confirmed"
 CMD_FAILED = "failed"
-CMD_RESULTS = [CMD_PENDING, CMD_CONFIRMED, CMD_NOT_CONFIRMED, CMD_FAILED]
+CMD_SUPERSEDED = "superseded"  # replaced by a newer action for the same room
+CMD_RESULTS = [CMD_PENDING, CMD_CONFIRMED, CMD_NOT_CONFIRMED, CMD_FAILED, CMD_SUPERSEDED]
+TEMP_DEBOUNCE = 1.5  # s: rapid +/- taps are merged into one target before pressing
 
 CONF_MAX_RETRIES = "max_retries"
 DEFAULT_MAX_RETRIES = 2

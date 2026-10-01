@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+import contextvars
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import logging
@@ -31,6 +32,7 @@ from .const import (
     CMD_CONFIRMED,
     CMD_FAILED,
     CMD_NOT_CONFIRMED,
+    CMD_SUPERSEDED,
     CMD_PENDING,
     CONF_MAX_RETRIES,
     CONF_SCAN_INTERVAL,
@@ -86,6 +88,35 @@ class ContractData:
 
 
 MsheirebData = dict[int, ContractData]
+
+
+class SequenceSuperseded(Exception):
+    """A newer action for the same room replaced the running sequence."""
+
+
+@dataclass
+class RoomSequence:
+    """One background press/settle/verify sequence for a room (the latest action wins)."""
+
+    zone_key: str
+    task: asyncio.Task | None = None
+    started: bool = False  # holds the apartment queue: only stopped at safe points (before a press)
+    cancelled: bool = False
+
+
+class _RecGuard:
+    """Lets a running retry stop at the next press once its command was superseded."""
+
+    def __init__(self, rec: CommandRecord) -> None:
+        self.rec = rec
+
+    @property
+    def cancelled(self) -> bool:
+        return self.rec.result == CMD_SUPERSEDED
+
+
+# the sequence (or retry) the current task belongs to; checked before every press
+_SEQ: contextvars.ContextVar[Any] = contextvars.ContextVar("msheireb_sequence", default=None)
 
 
 @dataclass
@@ -149,6 +180,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
     """Polls smart-home + controller-status for every contract and tracks health."""
 
     config_entry: ConfigEntry
+    wait_for_sequences = False  # tests only: climate service calls wait for their sequence
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, api: MsheirebApi) -> None:
         interval = int(entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
@@ -167,6 +199,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         self._cancel_refresh: CALLBACK_TYPE | None = None
         self._cancel_confirm: dict[str, CALLBACK_TYPE] = {}
         self._last_fan_press: dict[str, float] = {}
+        self._sequences: dict[str, RoomSequence] = {}
         self.last_unlock: dict[int, dict[str, Any]] = {}  # contract_id -> {result, at, message}
         from .drift import DriftManager
 
@@ -365,6 +398,9 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
 
     async def async_pulse(self, zone: HvacZone, role: str) -> dict[str, Any]:
         """Send a PULSE for a role of a zone (sn discovered from labels)."""
+        guard = _SEQ.get()
+        if guard is not None and guard.cancelled:
+            raise SequenceSuperseded  # safe point: a newer action for this room takes over
         control = zone.controls.get(role)
         if control is None:
             raise MsheirebError(f"{zone.room_name}: no control for {role}")
@@ -615,6 +651,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
 
     async def _async_retry(self, rec: CommandRecord) -> None:
         """Re-read the actual state and send only what is still needed."""
+        _SEQ.set(_RecGuard(rec))
         try:
             async with self.command_lock(rec.contract_id or 0):
                 if self.health.commands.get(rec.zone_key) is not rec or rec.result != CMD_PENDING:
@@ -659,6 +696,8 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                                        + (self.fan_verify_window if KIND_FAN in rec.expected else 0.0))
                 _LOGGER.debug("Retry %s for %s: sent %s", rec.retries, rec.room, [p["label"] for p in new])
                 self._schedule_confirm_check(rec)
+        except SequenceSuperseded:
+            _LOGGER.debug("Retry for %s stopped: superseded by a newer action", rec.room)
         except MsheirebError as err:
             rec.result = CMD_FAILED
             rec.error = str(err)
@@ -753,6 +792,67 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
             f"`{rec.description}` for **{rec.room}** was {detail}. "
             f"Expected {rec.expected}; the AC may not have registered every press.",
         )
+
+    # ---------------------------------------------------------------- room sequences
+    def room_busy(self, zone_key: str) -> bool:
+        """A sequence (incl. debounce / waiting in the queue) or its confirm/retry is in flight."""
+        seq = self._sequences.get(zone_key)
+        if seq is not None and seq.task is not None and not seq.task.done():
+            return True
+        rec = self.health.commands.get(zone_key)
+        return rec is not None and (rec.result == CMD_PENDING or rec.retrying)
+
+    @callback
+    def supersede(self, zone_key: str) -> bool:
+        """Stop the room's running sequence/command in favour of a newer action. True if one was."""
+        found = False
+        seq = self._sequences.pop(zone_key, None)
+        if seq is not None and seq.task is not None and not seq.task.done():
+            found = True
+            seq.cancelled = True
+            if not seq.started:
+                seq.task.cancel()  # still debouncing or queued: nothing pressed yet
+        rec = self.health.commands.get(zone_key)
+        if rec is not None and (rec.result == CMD_PENDING or rec.retrying):
+            found = True
+            rec.result = CMD_SUPERSEDED
+            for key in (zone_key, f"verify_{zone_key}"):
+                if key in self._cancel_confirm:
+                    self._cancel_confirm.pop(key)()
+            self.notify_health()
+        return found
+
+    @callback
+    def start_sequence(
+        self, zone_key: str, body: Callable[[RoomSequence], Awaitable[None]], debounce: float = 0.0,
+    ) -> RoomSequence:
+        """Run `body` as a background task through the apartment queue; a newer call for the same
+        room supersedes it (latest wins)."""
+        self.supersede(zone_key)
+        seq = RoomSequence(zone_key)
+
+        async def _run() -> None:
+            _SEQ.set(seq)
+            try:
+                if debounce > 0:
+                    await asyncio.sleep(debounce)
+                await body(seq)
+            except SequenceSuperseded:
+                _LOGGER.debug("Sequence for %s superseded by a newer action", zone_key)
+            except asyncio.CancelledError:
+                if not seq.cancelled:
+                    raise
+            finally:
+                if self._sequences.get(zone_key) is seq:
+                    self._sequences.pop(zone_key)
+                self.async_update_listeners()
+
+        self._sequences[zone_key] = seq
+        seq.task = self._spawn(_run(), f"{DOMAIN}_sequence_{zone_key}")
+        return seq
+
+    def _spawn(self, coro: Any, name: str) -> asyncio.Task:
+        return self.config_entry.async_create_background_task(self.hass, coro, name, eager_start=False)
 
     # ---------------------------------------------------------------- scheduling
     @callback

@@ -177,7 +177,7 @@ class DriftManager:
         rec = self.coordinator.health.commands.get(zone.key)
         if rec is not None and (rec.result == "pending" or rec.retrying):
             return True
-        if zone.key in self.restoring:
+        if zone.key in self.restoring or self.coordinator.room_busy(zone.key):
             return True
         return self.coordinator.command_lock(zone.contract_id).locked()
 
@@ -193,7 +193,13 @@ class DriftManager:
                 continue  # can't act (and readings may be stale) while offline
             for key, zone in cd.zones.items():
                 want = self.desired.get(key)
-                if not want or self._in_flight(zone):
+                if not want:
+                    continue
+                if self._in_flight(zone):
+                    # never act on readings taken while our own presses settle; start over afterwards
+                    ep = self.episodes.get(key)
+                    if ep is not None and not ep.handled:
+                        self.episodes.pop(key, None)
                     continue
                 have = actual_values(zone)
                 diff = {k: (want[k], have.get(k)) for k in KEYS_ORDER if k in want and _differs(k, want[k], have.get(k))}
@@ -231,9 +237,8 @@ class DriftManager:
             ep.restored = True
             expected = {k: d for k, (d, _a) in ep.diff.items()}
             self.restoring.add(zone.key)
-            self.coordinator.config_entry.async_create_task(
-                self.hass, self._async_restore(zone, expected), f"{DOMAIN}_restore_{zone.key}"
-            )
+            # a room sequence like a user action: a newer action from HA supersedes the restore
+            self.coordinator.start_sequence(zone.key, lambda seq: self._async_restore(zone, expected, seq))
             action = "restoring: " + ", ".join(f"{LABELS[k]} → {describe(k, v)}" for k, v in expected.items())
         elif want_restore:
             action = "not restored (Auto-restore is off for this room)"
@@ -254,11 +259,16 @@ class DriftManager:
             )
         self.coordinator.notify_health()
 
-    async def _async_restore(self, zone: HvacZone, expected: dict[str, Any]) -> None:
+    async def _async_restore(self, zone: HvacZone, expected: dict[str, Any], seq: Any = None) -> None:
         from .api import MsheirebError
+        from .coordinator import SequenceSuperseded
 
         try:
             async with self.coordinator.command_lock(zone.contract_id):
+                if seq is not None:
+                    if seq.cancelled:
+                        raise SequenceSuperseded
+                    seq.started = True
                 fresh = await self.coordinator.async_read_zone(zone) or zone
                 await self.coordinator.async_command(
                     fresh, expected, "restore after external change",

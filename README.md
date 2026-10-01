@@ -50,7 +50,15 @@ The apartment device can show an **Unlock door** button that does exactly what t
 > Only enable it if you need it, restrict who has HA access, avoid exposing it to voice assistants, and consider wrapping it in a confirmation (e.g. a script with a confirmation dialog). Each unlock is logged at INFO level (without IDs).
 
 ## How it controls the AC
-The portal's controller accepts **pulse** commands. Each *Temp Up/Down* pulse moves the setpoint by 0.5 °C (verified). To set a temperature, the integration sends the needed number of Up/Down pulses one at a time, 5.0 s apart start-to-start by default (configurable 0.5–10 s; the real AC also registered 3 presses 1.2–1.5 s apart, so you can lower it for faster changes), and re-reads the setpoint every 3 pulses. It never sends more pulses than initially needed. Power and fan pulses are only sent when the reported state differs from the requested one. Control serial numbers are discovered from the control labels, not hard-coded. The UI updates optimistically and is reconciled by an extra refresh about 5 s after a command, independent of the polling interval.
+The portal's controller accepts **pulse** commands. Each *Temp Up/Down* pulse moves the setpoint by 0.5 °C (verified). To set a temperature, the integration sends the needed number of Up/Down pulses one at a time, 5.0 s apart start-to-start by default (configurable 0.5–10 s; the real AC also registered 3 presses 1.2–1.5 s apart, so you can lower it for faster changes), and re-reads the setpoint every 3 pulses. It never sends more pulses than initially needed. Power and fan pulses are only sent when the reported state differs from the requested one. Control serial numbers are discovered from the control labels, not hard-coded. An extra refresh runs about 5 s after a command, independent of the polling interval.
+
+### Instant climate card
+
+- Every climate action (on/off, fan mode, target temperature) is written to the card **immediately** and the service call returns at once. The presses, settle times, verification and retries run in the background, one at a time per apartment.
+- While that sequence and its retries are in flight, the card keeps showing the **requested** values; poll readings that still show the old state (e.g. during the power or fan settle time) are ignored, so the card does not flicker back. External-change detection is paused for that room meanwhile.
+- If the final retry fails, the card reverts to the **actual** reported state and a notification is shown (as before). The room's *Last command* sensor shows the result.
+- A newer action for the same room **supersedes** the running one (latest wins): it stops at the next safe point (never between a power press and its power check) and the newer request is applied from a fresh reading. The old command shows as *superseded*.
+- Temperature taps are **debounced**: quick +/- taps within ~1.5 s are combined into one target before any press.
 
 ## Installation
 

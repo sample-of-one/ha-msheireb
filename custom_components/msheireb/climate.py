@@ -1,9 +1,8 @@
 """Climate entities: one per room HVAC zone."""
 from __future__ import annotations
 
-import asyncio
+import asyncio  # noqa: F401  (tests patch climate.asyncio.sleep)
 import logging
-import time
 from typing import Any
 
 from homeassistant.components.climate import (
@@ -28,7 +27,7 @@ from .const import (
     DEFAULT_FAN_AUTO_WHEN_OFF,
     FAN_ROLES,
     ROLE_FAN_AUTO,
-    OPTIMISTIC_TIMEOUT,
+    TEMP_DEBOUNCE,
     CONF_PULSE_INTERVAL,
     DEFAULT_PULSE_INTERVAL,
     ROLE_POWER,
@@ -36,7 +35,7 @@ from .const import (
     ROLE_TEMP_UP,
     TEMP_STEP,
 )
-from .coordinator import KIND_FAN, KIND_POWER, KIND_TARGET, MsheirebCoordinator
+from .coordinator import KIND_FAN, KIND_POWER, KIND_TARGET, MsheirebCoordinator, RoomSequence, SequenceSuperseded
 from .entity import MsheirebEntity, room_device, room_entity_id, zone_needs_disambiguation
 from .models import HvacZone
 
@@ -105,9 +104,9 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
         if ROLE_POWER in zone.controls:
             features |= ClimateEntityFeature.TURN_ON | ClimateEntityFeature.TURN_OFF
         self._attr_supported_features = features
-        # optimistic overrides: name -> (value, monotonic timestamp)
-        self._optimistic: dict[str, tuple[Any, float]] = {}
-        self._lock = asyncio.Lock()
+        # requested state (power/fan/target) shown while the room's sequence + retries are in flight
+        self._intent: dict[str, Any] = {}
+        self._fan_if_differs = False
 
     # ------------------------------------------------------------ state
     @property
@@ -126,35 +125,15 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
         )
 
     def _opt(self, name: str, actual: Any) -> Any:
-        item = self._optimistic.get(name)
-        if item is None:
-            return actual
-        return item[0]
-
-    def _set_opt(self, name: str, value: Any) -> None:
-        self._optimistic[name] = (value, time.monotonic())
-        self.async_write_ha_state()
+        return self._intent[name] if name in self._intent else actual
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        zone = self.zone
-        now = time.monotonic()
-        if zone is not None:
-            actual = {
-                "power": zone.power,
-                "target": zone.setpoint,
-                "fan": zone.fan_mode(self._fan_roles),
-            }
-            rec = self.coordinator.health.commands.get(self._zone_key)
-            pending = rec is not None and (rec.result == "pending" or rec.retrying)
-            for name, (value, ts) in list(self._optimistic.items()):
-                if self._lock.locked() or self.coordinator.command_lock(self._contract_id).locked():
-                    self._optimistic[name] = (value, now)  # age counts from the end of the presses
-                    continue  # presses still running: keep showing the intent
-                # actual wins as soon as it matches, the command is settled, or it is too old
-                limit = OPTIMISTIC_TIMEOUT + (self.coordinator.fan_verify_window if name == "fan" else 0.0)
-                if actual.get(name) == value or not pending or now - ts > limit:
-                    self._optimistic.pop(name, None)
+        # the requested values win over every reading until the sequence and all its retries are
+        # over; then the actual state is shown (after a final failure: the old values + a notification)
+        if self._intent and not self.coordinator.room_busy(self._zone_key):
+            self._intent.clear()
+            self._fan_if_differs = False
         super()._handle_coordinator_update()
 
     @property
@@ -198,74 +177,89 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             raise HomeAssistantError(f"{self.name}: controller not available")
         return zone
 
-    async def _command(self, zone: HvacZone, expected: dict[str, Any], description: str,
-                       fan_if_differs: bool = False) -> None:
-        """Execute via the coordinator (which tracks, confirms, retries and records desired state)."""
-        try:
-            await self.coordinator.async_command(zone, expected, description, self._pulse_interval,
-                                                 fan_if_differs=fan_if_differs)
-        except MsheirebError as err:
-            raise HomeAssistantError(f"{self.name}: command failed: {err}") from err
+    async def _launch(self, debounce: float = 0.0) -> None:
+        """Show the request now and run the presses in the background (latest action wins)."""
+        seq = self.coordinator.start_sequence(self._zone_key, self._run_sequence, debounce=debounce)
+        self.async_write_ha_state()
+        if self.coordinator.wait_for_sequences and seq.task is not None:  # test hook only
+            await asyncio.shield(seq.task)
 
-    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """OFF: remember the fan speed, power off, fan to Auto. COOL: power on, re-apply the speed.
-
-        Sequenced as one command (power first, then fan) under the apartment command lock;
-        each part is only pulsed when the reported state differs, then confirmed/retried.
-        """
-        if hvac_mode not in (HVACMode.OFF, HVACMode.COOL):
-            raise HomeAssistantError(f"Unsupported HVAC mode {hvac_mode}")
-        want_on = hvac_mode == HVACMode.COOL
-        drift = self.coordinator.drift
-        async with self._lock, self.coordinator.command_lock(self._contract_id):
-            zone = self._require_zone()
-            if ROLE_POWER not in zone.controls:
-                raise HomeAssistantError(f"{self.name}: no power control")
-            current_fan = zone.fan_mode(self._fan_roles)
-            expected: dict[str, Any] = {KIND_POWER: want_on}
-            fan_auto = bool(self._entry.options.get(CONF_FAN_AUTO_WHEN_OFF, DEFAULT_FAN_AUTO_WHEN_OFF))
-            keep_fan: str | None = None  # 'Fan to Auto when off' disabled: desired fan = actual
-            if not want_on:
-                memory = drift.prev_fan.get(zone.key)
-                remembered = current_fan or drift.desired.get(zone.key, {}).get(KIND_FAN)
-                # Only remember a real speed taken while on; never replace a remembered speed with
-                # Auto (Auto may come from our own off-sequence, a drift restore or an AC restart).
-                if remembered and (memory is None or (zone.power is not False and remembered != ROLE_FAN_AUTO)):
-                    drift.remember_fan(zone.key, remembered)
-                if fan_auto and ROLE_FAN_AUTO in self._fan_roles:
-                    expected[KIND_FAN] = ROLE_FAN_AUTO
-                elif not fan_auto:
-                    keep_fan = current_fan  # power only; the fan speed is left untouched
-            else:
-                fan = drift.prev_fan.get(zone.key) or drift.desired.get(zone.key, {}).get(KIND_FAN)
-                if fan not in self._fan_roles:
-                    drift.forget_desired(zone.key, KIND_FAN)  # unknown: leave the fan as it is
-                else:
-                    # with 'Fan to Auto when off' disabled the speed is only pressed if the actual
-                    # speed (read after the power change) differs from the remembered/desired one
-                    expected[KIND_FAN] = fan
-            if keep_fan:
-                drift.set_desired(zone.key, {KIND_FAN: keep_fan})
-            if self.coordinator._zone_matches(zone, expected):
-                self.coordinator.async_set_desired(zone.key, expected)
-                for name in ("power", "fan"):
-                    self._optimistic.pop(name, None)
-                self.async_write_ha_state()
+    async def _run_sequence(self, seq: RoomSequence) -> None:
+        coord = self.coordinator
+        queued = coord.command_lock(self._contract_id).locked()
+        async with coord.command_lock(self._contract_id):
+            if seq.cancelled:
+                raise SequenceSuperseded
+            seq.started = True
+            zone = self.zone
+            expected = {k: v for k, v in self._intent.items()}
+            if zone is None or not expected:
                 return
-            # show the intent right away; the actual readings win after the command settles
-            self._set_opt("power", want_on)
-            if KIND_FAN in expected and fan_auto:
-                self._set_opt("fan", expected[KIND_FAN])
+            if queued or zone.setpoint is None:
+                # another sequence ran meanwhile: decide from a fresh reading, never toggle blindly
+                zone = await coord.async_read_zone(zone) or zone
+            if coord._zone_matches(zone, expected):
+                coord.async_set_desired(zone.key, expected)
+                return
             parts = ", ".join(f"{k}={v}" for k, v in expected.items())
             try:
-                await self._command(zone, expected, f"set_hvac_mode {hvac_mode} ({parts})",
-                                    fan_if_differs=want_on and not fan_auto)
-            except HomeAssistantError:
-                self._optimistic.pop("power", None)
-                self._optimistic.pop("fan", None)
-                self.async_write_ha_state()
-                raise
-        self.coordinator.schedule_refresh_after_command()
+                await coord.async_command(zone, expected, f"set ({parts})", self._pulse_interval,
+                                          fan_if_differs=self._fan_if_differs)
+            except MsheirebError as err:  # tracked as failed + notified by the coordinator
+                _LOGGER.warning("%s: command failed: %s", self.name, err)
+        coord.schedule_refresh_after_command()
+
+    def _hvac_intent(self, hvac_mode: HVACMode, zone: HvacZone) -> None:
+        """OFF: remember the fan speed, power off, fan to Auto. COOL: power on, re-apply the speed."""
+        if hvac_mode not in (HVACMode.OFF, HVACMode.COOL):
+            raise HomeAssistantError(f"Unsupported HVAC mode {hvac_mode}")
+        if ROLE_POWER not in zone.controls:
+            raise HomeAssistantError(f"{self.name}: no power control")
+        want_on = hvac_mode == HVACMode.COOL
+        drift = self.coordinator.drift
+        current_fan = zone.fan_mode(self._fan_roles)
+        fan_auto = bool(self._entry.options.get(CONF_FAN_AUTO_WHEN_OFF, DEFAULT_FAN_AUTO_WHEN_OFF))
+        self._intent[KIND_POWER] = want_on
+        self._fan_if_differs = False
+        if not want_on:
+            memory = drift.prev_fan.get(zone.key)
+            remembered = current_fan or drift.desired.get(zone.key, {}).get(KIND_FAN)
+            # Only remember a real speed taken while on; never replace a remembered speed with
+            # Auto (Auto may come from our own off-sequence, a drift restore or an AC restart).
+            if remembered and (memory is None or (zone.power is not False and remembered != ROLE_FAN_AUTO)):
+                drift.remember_fan(zone.key, remembered)
+            if fan_auto and ROLE_FAN_AUTO in self._fan_roles:
+                self._intent[KIND_FAN] = ROLE_FAN_AUTO
+            elif not fan_auto:
+                self._intent.pop(KIND_FAN, None)
+                if current_fan:
+                    drift.set_desired(zone.key, {KIND_FAN: current_fan})  # power only; fan untouched
+        else:
+            fan = drift.prev_fan.get(zone.key) or drift.desired.get(zone.key, {}).get(KIND_FAN)
+            if fan not in self._fan_roles:
+                drift.forget_desired(zone.key, KIND_FAN)  # unknown: leave the fan as it is
+                self._intent.pop(KIND_FAN, None)
+            else:
+                self._intent[KIND_FAN] = fan
+                # with 'Fan to Auto when off' disabled the speed is only pressed if the actual
+                # speed (read after the power change) differs from the remembered/desired one
+                self._fan_if_differs = not fan_auto
+
+    async def _start_if_needed(self, zone: HvacZone, debounce: float = 0.0) -> None:
+        if not self.coordinator.room_busy(self._zone_key) and self.coordinator._zone_matches(zone, self._intent):
+            self.coordinator.async_set_desired(zone.key, dict(self._intent))
+            self._intent.clear()
+            self._fan_if_differs = False
+            self.async_write_ha_state()
+            return
+        await self._launch(debounce)
+
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Returns at once; power first, then fan, run in the background through the apartment queue,
+        each part only pulsed when the reported state differs, then confirmed/retried."""
+        zone = self._require_zone()
+        self._hvac_intent(hvac_mode, zone)
+        await self._start_if_needed(zone)
 
     async def async_turn_on(self) -> None:
         await self.async_set_hvac_mode(HVACMode.COOL)
@@ -276,39 +270,32 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
     async def async_set_fan_mode(self, fan_mode: str) -> None:
         if fan_mode not in self._fan_roles:
             raise HomeAssistantError(f"Unsupported fan mode {fan_mode}")
-        async with self._lock, self.coordinator.command_lock(self._contract_id):
-            zone = self._require_zone()
-            # an explicit choice from HA is what to re-apply on the next turn-on (on or off)
-            self.coordinator.drift.remember_fan(zone.key, fan_mode)
-            if zone.fan_mode(self._fan_roles) == fan_mode:
-                self.coordinator.async_set_desired(zone.key, {KIND_FAN: fan_mode})
-                self._optimistic.pop("fan", None)
-                self.async_write_ha_state()
-                return
-            await self._command(zone, {KIND_FAN: fan_mode}, f"set_fan_mode {fan_mode}")
-            self._set_opt("fan", fan_mode)
-        self.coordinator.schedule_refresh_after_command()
+        zone = self._require_zone()
+        # an explicit choice from HA is what to re-apply on the next turn-on (on or off)
+        self.coordinator.drift.remember_fan(zone.key, fan_mode)
+        self._intent[KIND_FAN] = fan_mode
+        self._fan_if_differs = False
+        await self._start_if_needed(zone)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        if (mode := kwargs.get(ATTR_HVAC_MODE)) is not None:
-            await self.async_set_hvac_mode(mode)
-        if (temp := kwargs.get(ATTR_TEMPERATURE)) is None:
+        temp = kwargs.get(ATTR_TEMPERATURE)
+        mode = kwargs.get(ATTR_HVAC_MODE)
+        if temp is None and mode is None:
             return
-        target = _round_step(min(self.max_temp, max(self.min_temp, float(temp))))
-        async with self._lock, self.coordinator.command_lock(self._contract_id):
-            zone = self._require_zone()
+        zone = self._require_zone()
+        if mode is not None:
+            self._hvac_intent(mode, zone)
+        debounce = 0.0
+        if temp is not None:
+            target = _round_step(min(self.max_temp, max(self.min_temp, float(temp))))
             current = zone.setpoint
             if current is None:
                 raise HomeAssistantError(f"{self.name}: current setpoint unknown")
             needed = round((target - current) / TEMP_STEP)
-            if needed == 0:
-                self.coordinator.async_set_desired(zone.key, {KIND_TARGET: target})
-                self._optimistic.pop("target", None)
-                self.async_write_ha_state()
-                return
-            role = ROLE_TEMP_UP if needed > 0 else ROLE_TEMP_DOWN
-            if role not in zone.controls:
-                raise HomeAssistantError(f"{self.name}: no {role} control")
-            self._set_opt("target", target)
-            await self._command(zone, {KIND_TARGET: target}, f"set_temperature {current:.1f} -> {target:.1f}")
-        self.coordinator.schedule_refresh_after_command()
+            if needed:
+                role = ROLE_TEMP_UP if needed > 0 else ROLE_TEMP_DOWN
+                if role not in zone.controls:
+                    raise HomeAssistantError(f"{self.name}: no {role} control")
+            self._intent[KIND_TARGET] = target
+            debounce = TEMP_DEBOUNCE  # rapid +/- taps: one target, pressed after the taps stop
+        await self._start_if_needed(zone, debounce)
