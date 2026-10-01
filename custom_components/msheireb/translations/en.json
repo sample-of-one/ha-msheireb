@@ -47,12 +47,12 @@
         "data_description": {
           "min_temp": "Lowest setpoint the thermostat cards allow (°C, 0.5 steps).",
           "max_temp": "Highest setpoint the thermostat cards allow (°C, 0.5 steps).",
-          "scan_interval": "How often the portal is polled (15–600 s).",
+          "scan_interval": "How often the portal is polled (15–600 s, default 300 s = 5 min). Commands get their own refreshes (~5 s after sending and at the end of the confirmation window), independent of this.",
           "pulse_interval": "Time between consecutive button presses; the AC misses presses sent too fast (0.5–10 s, default 5).",
           "notifications": "Login failure, controller/portal offline, unconfirmed commands.",
           "max_retries": "0 = off. Re-sends a command that the AC did not confirm.",
           "external_change": "What to do when the wall panel, the portal or a power outage changes a room.",
-          "drift_grace": "How long a change must persist (and at least 2 polls) before acting (0–3600 s).",
+          "drift_grace": "How long a change must persist, and at least 2 polls, before acting (0–3600 s). With 5-min polling, external changes are handled about 5–10 min after they happen.",
           "adopt_external": "Treat external changes as the new desired state instead of restoring."
         }
       }

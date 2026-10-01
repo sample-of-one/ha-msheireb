@@ -25,7 +25,7 @@ CONF_SCAN_INTERVAL = "scan_interval"
 
 DEFAULT_MIN_TEMP = 18.0
 DEFAULT_MAX_TEMP = 30.0
-DEFAULT_SCAN_INTERVAL = 30  # seconds
+DEFAULT_SCAN_INTERVAL = 300  # seconds (5 min); commands get their own refreshes
 
 TEMP_STEP = 0.5  # one Temp Up/Down pulse = 0.5 C (measured: 1950 -> 2000)
 RAW_TEMP_SCALE = 100  # API reports C x 100

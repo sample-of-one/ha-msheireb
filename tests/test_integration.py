@@ -180,7 +180,7 @@ async def test_default_pulse_spacing_and_option_range(hass):  # 5.0 default, 0.5
 
 
 async def test_options_use_selectors_and_store_ints(hass):
-    """Numeric options are sliders/boxes with units; whole-number options are stored as int."""
+    """All numeric options are number boxes with units; whole-number options are stored as int."""
     from homeassistant.helpers.selector import BooleanSelector, NumberSelector, SelectSelector
 
     entry, _ = await _setup(hass)
@@ -188,10 +188,10 @@ async def test_options_use_selectors_and_store_ints(hass):
     schema = result["data_schema"].schema
     sel = {str(k): v for k, v in schema.items()}
     expect = {  # key: (min, max, step, unit, mode)
-        "max_retries": (0, 5, 1, None, "slider"),
-        "pulse_interval": (0.5, 10, 0.5, "s", "slider"),
-        "min_temp": (10, 35, 0.5, "°C", "slider"),
-        "max_temp": (10, 35, 0.5, "°C", "slider"),
+        "max_retries": (0, 5, 1, None, "box"),
+        "pulse_interval": (0.5, 10, 0.5, "s", "box"),
+        "min_temp": (10, 35, 0.5, "°C", "box"),
+        "max_temp": (10, 35, 0.5, "°C", "box"),
         "scan_interval": (15, 600, 1, "s", "box"),
         "drift_grace": (0, 3600, 1, "s", "box"),
     }

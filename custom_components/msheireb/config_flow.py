@@ -157,7 +157,7 @@ PASSWORD_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWO
 
 
 def _num(min_: float, max_: float, step: float, unit: str | None = None,
-         mode: NumberSelectorMode = NumberSelectorMode.SLIDER) -> NumberSelector:
+         mode: NumberSelectorMode = NumberSelectorMode.BOX) -> NumberSelector:
     cfg = NumberSelectorConfig(min=min_, max=max_, step=step, mode=mode)
     if unit:
         cfg["unit_of_measurement"] = unit
@@ -206,7 +206,7 @@ class MsheirebOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_SCAN_INTERVAL,
                     default=int(_clamp(opts.get(CONF_SCAN_INTERVAL), SCAN_MIN, SCAN_MAX, DEFAULT_SCAN_INTERVAL)),
-                ): _num(SCAN_MIN, SCAN_MAX, 1, "s", NumberSelectorMode.BOX),
+                ): _num(SCAN_MIN, SCAN_MAX, 1, "s"),
                 vol.Required(
                     CONF_PULSE_INTERVAL,
                     default=_clamp(opts.get(CONF_PULSE_INTERVAL), PULSE_INTERVAL_MIN, PULSE_INTERVAL_MAX,
@@ -226,7 +226,7 @@ class MsheirebOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_DRIFT_GRACE,
                     default=int(_clamp(opts.get(CONF_DRIFT_GRACE), 0, GRACE_MAX, DEFAULT_DRIFT_GRACE)),
-                ): _num(0, GRACE_MAX, 1, "s", NumberSelectorMode.BOX),
+                ): _num(0, GRACE_MAX, 1, "s"),
                 vol.Required(
                     CONF_ADOPT_EXTERNAL, default=bool(opts.get(CONF_ADOPT_EXTERNAL, DEFAULT_ADOPT_EXTERNAL))
                 ): BooleanSelector(),
