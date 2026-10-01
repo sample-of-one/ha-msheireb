@@ -15,6 +15,8 @@ from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig,
 
 from .api import MsheirebApi, MsheirebAuthError, MsheirebError
 from .const import (
+    CONF_CONTRACTS,
+    slim_contracts,
     CONF_ADOPT_EXTERNAL,
     CONF_DRIFT_GRACE,
     CONF_EXTERNAL_CHANGE,
@@ -58,6 +60,7 @@ async def _validate(hass: HomeAssistant, email: str, password: str) -> dict[str,
             CONF_ACCESS_TOKEN: api.access_token,
             CONF_REFRESH_TOKEN: api.refresh_token,
             CONF_EXPIRES_AT: api.expires_at,
+            CONF_CONTRACTS: slim_contracts(api.contracts),
         },
         "contracts": len(api.contracts),
     }

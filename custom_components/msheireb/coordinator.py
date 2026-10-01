@@ -199,6 +199,26 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                 cd = await self._fetch_contract(contract)
                 if cd is not None:
                     result[cd.contract_id] = cd
+            _LOGGER.debug(
+                "Poll: %d contract(s); %s",
+                len(result),
+                ", ".join(
+                    f"contract {cid}: {len((cd.raw_smart_home or {}).get('rooms') or [])} room(s), "
+                    f"{len(cd.zones)} HVAC zone(s), controller={cd.controller_connected}"
+                    for cid, cd in result.items()
+                ) or "nothing to poll",
+            )
+            if not result:
+                _LOGGER.warning("No Msheireb contracts found for this account; no room entities will be created")
+            for cid, cd in result.items():
+                if cd.raw_smart_home is not None and not cd.zones:
+                    _LOGGER.warning(
+                        "Contract %s returned %d room(s) but no HVAC devices were recognised (labels: %s)",
+                        cid,
+                        len(cd.raw_smart_home.get("rooms") or []),
+                        sorted({c.get("label") for r in cd.raw_smart_home.get("rooms") or []
+                                for d in r.get("devices") or [] for c in d.get("controls") or []})[:20],
+                    )
         except MsheirebAuthError as err:
             self._record_failure(err, reachable=True)
             self.health.auth_status = AUTH_FAILED

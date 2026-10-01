@@ -10,6 +10,14 @@ CONF_ACCESS_TOKEN = "access_token"
 CONF_REFRESH_TOKEN = "refresh_token"
 CONF_EXPIRES_AT = "expires_at"
 CONF_USER_ID = "user_id"
+CONF_CONTRACTS = "contracts"
+
+_CONTRACT_FIELDS = ("id", "unitId", "unitName", "externalId", "type", "status", "startDate", "endDate")
+
+
+def slim_contracts(contracts: list) -> list:
+    """Keep only the contract fields the integration needs."""
+    return [{k: c[k] for k in _CONTRACT_FIELDS if k in c} for c in contracts if isinstance(c, dict) and c.get("id") is not None]
 
 CONF_MIN_TEMP = "min_temp"
 CONF_MAX_TEMP = "max_temp"

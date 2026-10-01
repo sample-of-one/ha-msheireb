@@ -91,6 +91,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     }
     data = dict(entry.data)
     data.pop(CONF_EXPIRES_AT, None)
+    data["contracts"] = [async_redact_data(c, TO_REDACT) for c in data.get("contracts") or []]
     return {
         "entry": {
             "data": async_redact_data(data, TO_REDACT),

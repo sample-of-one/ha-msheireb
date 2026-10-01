@@ -14,7 +14,7 @@ class FakeApi:
     drop_pulses = 0  # drop the next N presses (simulate missed presses)
 
     def __init__(self, session, email, password, access_token=None, refresh_token=None,
-                 expires_at=None, token_callback=None, status_callback=None):
+                 expires_at=None, token_callback=None, status_callback=None, contracts=None):
         self.email, self.password = email, password
         self.access_token, self.refresh_token, self.expires_at = access_token, refresh_token, expires_at or 0
         self._cb = token_callback

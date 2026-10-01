@@ -9,7 +9,15 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
 from .api import MsheirebApi
-from .const import CONF_ACCESS_TOKEN, CONF_EXPIRES_AT, CONF_REFRESH_TOKEN, DOMAIN, STORE_VERSION
+from .const import (
+    CONF_ACCESS_TOKEN,
+    CONF_CONTRACTS,
+    CONF_EXPIRES_AT,
+    CONF_REFRESH_TOKEN,
+    DOMAIN,
+    STORE_VERSION,
+    slim_contracts,
+)
 from .drift import store_key
 from .coordinator import MsheirebCoordinator
 
@@ -22,15 +30,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: MsheirebConfigEntry) -> 
     @callback
     def _persist_tokens(access: str, refresh: str, expires_at: float) -> None:
         # Persist the rotated refresh token so a restart keeps the session.
-        hass.config_entries.async_update_entry(
-            entry,
-            data={
-                **entry.data,
-                CONF_ACCESS_TOKEN: access,
-                CONF_REFRESH_TOKEN: refresh,
-                CONF_EXPIRES_AT: expires_at,
-            },
-        )
+        data = {
+            **entry.data,
+            CONF_ACCESS_TOKEN: access,
+            CONF_REFRESH_TOKEN: refresh,
+            CONF_EXPIRES_AT: expires_at,
+        }
+        if api.contracts:  # keep the contract list (only /user/login returns it)
+            data[CONF_CONTRACTS] = slim_contracts(api.contracts)
+        hass.config_entries.async_update_entry(entry, data=data)
 
     api = MsheirebApi(
         async_get_clientsession(hass),
@@ -41,6 +49,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: MsheirebConfigEntry) -> 
         expires_at=entry.data.get(CONF_EXPIRES_AT),
         token_callback=_persist_tokens,
         status_callback=lambda status: coordinator.on_auth_status(status),
+        contracts=entry.data.get(CONF_CONTRACTS),
     )
     coordinator = MsheirebCoordinator(hass, entry, api)
     await coordinator.drift.async_load()  # desired state survives restarts

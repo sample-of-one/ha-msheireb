@@ -1,0 +1,38 @@
+{
+  "_comment": "Real response shapes captured from the live portal on 2026-10-01 (values redacted/dummied).",
+  "login": {
+    "status": "success",
+    "message": "User logged in successfully",
+    "data": {
+      "user": {"id": 9001, "name": "<redacted>", "email": "<redacted>", "external_id": "<redacted>",
+               "refresh_token_expires_at": "2026-10-08T13:06:51.000000Z", "status": 1},
+      "contracts": [{"id": 4242, "externalId": "t0000000", "unitName": "000/00/000/00", "unitId": "DEMO01",
+                     "buildingId": "BD00", "yardiBuildingRef": "u00-res", "type": "Residential",
+                     "startDate": "2025-01-01", "endDate": "2027-01-01", "status": "active",
+                     "linkedAt": "2026-09-29T11:41:06+03:00", "linkedBySelfOrAdmin": true, "grantedByUserId": null}],
+      "is_new_user": false,
+      "access_token": "LOGIN_ACCESS",
+      "refresh_token": "LOGIN_REFRESH",
+      "token_type": "Bearer",
+      "expires_in": 86400,
+      "refresh_expires_at": "2026-10-08T16:06:51+03:00"
+    }
+  },
+  "refresh": {
+    "status": "success",
+    "message": "Token refreshed",
+    "data": {
+      "user": {"id": 9001, "name": "<redacted>"},
+      "access_token": "REFRESHED_ACCESS",
+      "refresh_token": "REFRESHED_REFRESH",
+      "token_type": "Bearer",
+      "expires_in": 86400,
+      "refresh_expires_at": "2026-10-08T16:06:51+03:00"
+    }
+  },
+  "controller_status": {"status": "success", "message": null, "data": {"ip": "10.0.0.10", "status": "connected"}},
+  "lock_status": {"status": "success", "message": null, "data": {"contract_id": 4242,
+                  "access_point": "installations/X/access-points/Y",
+                  "locks": [{"display_name": "LOCK-1", "low_battery": false,
+                             "current_lock_status": {"connected": true, "outdated": false}}]}}
+}

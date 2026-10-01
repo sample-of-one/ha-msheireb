@@ -49,6 +49,20 @@ A command counts as *confirmed* when a later poll shows the requested state (set
 - Only Cool/Off is exposed. The controller reports no heating or dry modes.
 - Your email and password are stored in Home Assistant's config entry storage (`.storage/core.config_entries`), like other cloud integrations that need re-login.
 
+## Troubleshooting
+
+- **No room/climate entities (v0.3.0 and earlier):** fixed in v0.3.1. The portal's token-refresh
+  response carries no contract list, so after setup/restart the integration found zero contracts and
+  silently created no rooms. Contracts are now stored from login and re-fetched with one login if missing.
+  Update via HACS and restart; no reconfiguration needed.
+- **Debug logging** (per-poll contract/room/HVAC-zone counts, unrecognised labels):
+
+```yaml
+logger:
+  logs:
+    custom_components.msheireb: debug
+```
+
 ## Development
 ```
 uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python pytest-homeassistant-custom-component

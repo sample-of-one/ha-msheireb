@@ -54,6 +54,7 @@ class MsheirebApi:
         expires_at: float | None = None,
         token_callback: TokenCallback | None = None,
         status_callback: StatusCallback | None = None,
+        contracts: list[dict[str, Any]] | None = None,
     ) -> None:
         self._session = session
         self._email = email
@@ -67,7 +68,9 @@ class MsheirebApi:
         self.last_response_ms: float | None = None
         self._auth_lock = asyncio.Lock()
         self.user: dict[str, Any] = {}
-        self.contracts: list[dict[str, Any]] = []
+        # Contracts only come with /user/login (the refresh response has none), so they are
+        # persisted by the caller and passed back in here.
+        self.contracts: list[dict[str, Any]] = list(contracts or [])
 
     # ------------------------------------------------------------------ auth
     def _headers(self, auth: bool) -> dict[str, str]:
@@ -112,7 +115,7 @@ class MsheirebApi:
         self.expires_at = time.time() + lifetime
         if isinstance(data.get("user"), dict):
             self.user = data["user"]
-        if isinstance(data.get("contracts"), list):
+        if isinstance(data.get("contracts"), list) and data["contracts"]:
             self.contracts = data["contracts"]
         if self._token_callback:
             self._token_callback(self.access_token, self.refresh_token, self.expires_at)
@@ -178,11 +181,9 @@ class MsheirebApi:
             self._set_auth_status(AUTH_OK)
 
     async def async_ensure_session(self) -> None:
-        """Make sure we have a valid access token (and a contract list)."""
+        """Make sure we have a valid access token."""
         if not self.access_token or time.time() >= self.expires_at - TOKEN_REFRESH_MARGIN:
             await self._renew()
-        if not self.contracts:
-            await self._renew(force=True)
 
     async def _request(self, method: str, path: str, body: Any = None) -> Any:
         await self.async_ensure_session()
@@ -208,6 +209,20 @@ class MsheirebApi:
     # ------------------------------------------------------------------ data
     async def async_get_contracts(self) -> list[dict[str, Any]]:
         await self.async_ensure_session()
+        if not self.contracts:
+            # Refresh-token responses carry no contracts; only a full login returns them.
+            _LOGGER.debug("No stored contracts; logging in to fetch the contract list")
+            async with self._auth_lock:
+                if not self.contracts:
+                    self._set_auth_status(AUTH_RELOGIN)
+                    try:
+                        await self.async_login()
+                    except MsheirebAuthError:
+                        self._set_auth_status(AUTH_FAILED)
+                        raise
+                    self._set_auth_status(AUTH_OK)
+            if not self.contracts:
+                _LOGGER.warning("The Msheireb account has no linked contracts")
         return [c for c in self.contracts if c.get("id") is not None]
 
     async def async_get_smart_home(self, contract_id: int | str) -> dict[str, Any]:
