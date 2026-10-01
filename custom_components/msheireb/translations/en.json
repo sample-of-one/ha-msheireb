@@ -1,0 +1,115 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Msheireb resident portal",
+        "description": "Sign in with the same email and password you use at web-prod.mp-mdd.com.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Msheireb",
+        "description": "The saved login no longer works. Enter your portal password again.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password.",
+      "cannot_connect": "Could not reach the Msheireb portal.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reauth_successful": "Re-authentication was successful.",
+      "wrong_account": "That login belongs to a different account."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Msheireb options",
+        "data": {
+          "min_temp": "Minimum target temperature (°C)",
+          "max_temp": "Maximum target temperature (°C)",
+          "scan_interval": "Polling interval (seconds)",
+          "pulse_interval": "Pulse spacing (seconds between Temp Up/Down presses)",
+          "notifications": "Show notifications (login failure, controller/portal offline, unconfirmed commands)"
+        }
+      }
+    },
+    "error": {
+      "min_ge_max": "Minimum must be lower than maximum."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "controller": {
+        "name": "Apartment controller"
+      },
+      "lock_connected": {
+        "name": "Door lock connection"
+      },
+      "lock_battery": {
+        "name": "Door lock battery"
+      },
+      "portal_reachable": {
+        "name": "Portal reachable"
+      }
+    },
+    "sensor": {
+      "auth_status": {
+        "name": "Auth status",
+        "state": {
+          "ok": "OK",
+          "refreshing": "Refreshing token",
+          "relogin": "Re-logging in",
+          "failed": "Failed"
+        }
+      },
+      "last_update": {
+        "name": "Last successful update"
+      },
+      "last_error": {
+        "name": "Last error"
+      },
+      "response_time": {
+        "name": "API response time"
+      },
+      "consecutive_failures": {
+        "name": "Consecutive failures"
+      },
+      "token_expiry": {
+        "name": "Token expiry"
+      },
+      "commands_sent": {
+        "name": "Commands sent"
+      },
+      "commands_confirmed": {
+        "name": "Commands confirmed"
+      },
+      "commands_failed": {
+        "name": "Commands failed"
+      },
+      "last_command": {
+        "name": "{room} last command",
+        "state": {
+          "pending": "Pending",
+          "confirmed": "Confirmed",
+          "not_confirmed": "Not confirmed",
+          "failed": "Failed"
+        }
+      }
+    }
+  },
+  "issues": {
+    "reauth_required": {
+      "title": "Msheireb login needs attention",
+      "description": "The saved Msheireb portal login for {title} stopped working and automatic re-login failed. Go to Settings → Devices & services → Msheireb Smart Home and choose Reconfigure/Re-authenticate to enter your password again."
+    }
+  }
+}

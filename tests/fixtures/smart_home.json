@@ -1,0 +1,444 @@
+{
+  "status": "success",
+  "message": null,
+  "data": {
+    "apartment_ip": "10.0.0.10",
+    "rooms": [
+      {
+        "name": "Dining Room",
+        "icon": null,
+        "banner": null,
+        "sort_order": 1,
+        "devices": [
+          {
+            "id": 501,
+            "name": "HVAC",
+            "sort_order": 1,
+            "status": {
+              "analog": [
+                {
+                  "sn": 1,
+                  "type_code": "A",
+                  "io_type": "F",
+                  "label": "HVAC Setpoint",
+                  "current_status": 1950
+                },
+                {
+                  "sn": 2,
+                  "type_code": "A",
+                  "io_type": "F",
+                  "label": "HVAC Room Temperature",
+                  "current_status": 2150
+                }
+              ],
+              "digital": [
+                {
+                  "sn": 1,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC AC",
+                  "current_status": "ON"
+                },
+                {
+                  "sn": 2,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan Auto",
+                  "current_status": "OFF"
+                },
+                {
+                  "sn": 3,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan Low",
+                  "current_status": "OFF"
+                },
+                {
+                  "sn": 4,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan Medium",
+                  "current_status": "OFF"
+                },
+                {
+                  "sn": 5,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan High",
+                  "current_status": "ON"
+                }
+              ]
+            },
+            "controls": [
+              {
+                "sn": 1,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC AC",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D1||PULSE:S"
+              },
+              {
+                "sn": 2,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan Auto",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D2||PULSE:S"
+              },
+              {
+                "sn": 3,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan Low",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D3||PULSE:S"
+              },
+              {
+                "sn": 4,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan Medium",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D4||PULSE:S"
+              },
+              {
+                "sn": 5,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan High",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D5||PULSE:S"
+              },
+              {
+                "sn": 6,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Temp Up",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D6||PULSE:S"
+              },
+              {
+                "sn": 7,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Temp Down",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D7||PULSE:S"
+              },
+              {
+                "sn": 1,
+                "type_io": "S",
+                "type_code": "A",
+                "label": "HVAC Setpoint",
+                "value_type": "range",
+                "value": {
+                  "min": 500,
+                  "max": 4000
+                },
+                "command": "MP@A1||500 - 4000:S"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Master Bedroom",
+        "icon": null,
+        "banner": null,
+        "sort_order": 2,
+        "devices": [
+          {
+            "id": 502,
+            "name": "HVAC",
+            "sort_order": 1,
+            "status": {
+              "analog": [
+                {
+                  "sn": 3,
+                  "type_code": "A",
+                  "io_type": "F",
+                  "label": "HVAC Setpoint",
+                  "current_status": 2000
+                },
+                {
+                  "sn": 4,
+                  "type_code": "A",
+                  "io_type": "F",
+                  "label": "HVAC Room Temperature",
+                  "current_status": 1900
+                }
+              ],
+              "digital": [
+                {
+                  "sn": 8,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC AC",
+                  "current_status": "ON"
+                },
+                {
+                  "sn": 9,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan Auto",
+                  "current_status": "OFF"
+                },
+                {
+                  "sn": 10,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan Low",
+                  "current_status": "OFF"
+                },
+                {
+                  "sn": 11,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan Medium",
+                  "current_status": "OFF"
+                },
+                {
+                  "sn": 12,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan High",
+                  "current_status": "ON"
+                }
+              ]
+            },
+            "controls": [
+              {
+                "sn": 8,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC AC",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D8||PULSE:S"
+              },
+              {
+                "sn": 9,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan Auto",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D9||PULSE:S"
+              },
+              {
+                "sn": 10,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan Low",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D10||PULSE:S"
+              },
+              {
+                "sn": 11,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan Medium",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D11||PULSE:S"
+              },
+              {
+                "sn": 12,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan High",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D12||PULSE:S"
+              },
+              {
+                "sn": 13,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Temp Up",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D13||PULSE:S"
+              },
+              {
+                "sn": 14,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Temp Down",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D14||PULSE:S"
+              },
+              {
+                "sn": 3,
+                "type_io": "S",
+                "type_code": "A",
+                "label": "HVAC Setpoint",
+                "value_type": "range",
+                "value": {
+                  "min": 500,
+                  "max": 4000
+                },
+                "command": "MP@A3||500 - 4000:S"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Bedroom 1",
+        "icon": null,
+        "banner": null,
+        "sort_order": 3,
+        "devices": [
+          {
+            "id": 503,
+            "name": "HVAC",
+            "sort_order": 1,
+            "status": {
+              "analog": [
+                {
+                  "sn": 5,
+                  "type_code": "A",
+                  "io_type": "F",
+                  "label": "HVAC Setpoint",
+                  "current_status": 2000
+                },
+                {
+                  "sn": 6,
+                  "type_code": "A",
+                  "io_type": "F",
+                  "label": "HVAC Room Temperature",
+                  "current_status": 2100
+                }
+              ],
+              "digital": [
+                {
+                  "sn": 15,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC AC",
+                  "current_status": "ON"
+                },
+                {
+                  "sn": 16,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan Auto",
+                  "current_status": "OFF"
+                },
+                {
+                  "sn": 17,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan Low",
+                  "current_status": "OFF"
+                },
+                {
+                  "sn": 18,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan Medium",
+                  "current_status": "OFF"
+                },
+                {
+                  "sn": 19,
+                  "type_code": "D",
+                  "io_type": "F",
+                  "label": "HVAC Fan High",
+                  "current_status": "ON"
+                }
+              ]
+            },
+            "controls": [
+              {
+                "sn": 15,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC AC",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D15||PULSE:S"
+              },
+              {
+                "sn": 16,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan Auto",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D16||PULSE:S"
+              },
+              {
+                "sn": 17,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan Low",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D17||PULSE:S"
+              },
+              {
+                "sn": 18,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan Medium",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D18||PULSE:S"
+              },
+              {
+                "sn": 19,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Fan High",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D19||PULSE:S"
+              },
+              {
+                "sn": 20,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Temp Up",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D20||PULSE:S"
+              },
+              {
+                "sn": 21,
+                "type_io": "S",
+                "type_code": "D",
+                "label": "HVAC Temp Down",
+                "value_type": "string",
+                "value": "pulse",
+                "command": "MP@D21||PULSE:S"
+              },
+              {
+                "sn": 5,
+                "type_io": "S",
+                "type_code": "A",
+                "label": "HVAC Setpoint",
+                "value_type": "range",
+                "value": {
+                  "min": 500,
+                  "max": 4000
+                },
+                "command": "MP@A5||500 - 4000:S"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
