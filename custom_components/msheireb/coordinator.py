@@ -500,7 +500,8 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                     remaining = min(abs(left), cap - count)
 
     async def _execute_all(
-        self, zone: HvacZone, expected: dict[str, Any], spacing: float, sent: list[dict[str, Any]]
+        self, zone: HvacZone, expected: dict[str, Any], spacing: float, sent: list[dict[str, Any]],
+        fan_if_differs: bool = False,
     ) -> float:
         """Apply several targets in a safe order: power first, then setpoint, then fan.
 
@@ -516,6 +517,12 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
             if len(sent) > before and any(k in expected for k in (KIND_TARGET, KIND_FAN)):
                 t0 = time.monotonic()
                 fresh = await self._wait_for_power(zone, expected[KIND_POWER])
+                if fresh is not None and fan_if_differs and KIND_FAN in expected and KIND_TARGET not in expected \
+                        and fresh.fan_mode(FAN_ROLES) == expected[KIND_FAN]:
+                    expected.pop(KIND_FAN)  # actual speed already right: no delay, no fan press
+                    _LOGGER.debug("%s: fan already %s after power change; not pressing", zone.room_name,
+                                  fresh.fan_mode(FAN_ROLES))
+                    return time.monotonic() - t0
                 if fresh is None:
                     _LOGGER.debug("%s: power did not change within %.0f s; not pressing the fan yet",
                                   zone.room_name, POWER_CONFIRM_MAX)
@@ -526,6 +533,8 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                 await asyncio.sleep(delay)
                 zone = await self.async_read_zone(zone) or fresh
                 waited = time.monotonic() - t0
+        if fan_if_differs and KIND_FAN in expected and not sent and zone.fan_mode(FAN_ROLES) == expected[KIND_FAN]:
+            expected.pop(KIND_FAN)
         for kind in (KIND_TARGET, KIND_FAN):
             if kind in expected:
                 if sent and waited == 0.0:
@@ -557,6 +566,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         description: str,
         spacing: float,
         set_desired: bool = True,
+        fan_if_differs: bool = False,
     ) -> list[dict[str, Any]]:
         """Execute + track a command. Caller holds the contract command lock."""
         if set_desired:
@@ -565,7 +575,8 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         started = time.monotonic()
         self._last_fan_press.pop(zone.key, None)
         try:
-            waited = await self._execute_all(zone, expected, spacing, sent)
+            expected = dict(expected)
+            waited = await self._execute_all(zone, expected, spacing, sent, fan_if_differs)
         except MsheirebError as err:
             self.track_command(zone, description, dict(expected), sent, error=str(err),
                                started_monotonic=started, spacing=spacing)

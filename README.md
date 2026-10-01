@@ -24,6 +24,11 @@ Unofficial custom integration for the in-apartment AC (fan coil units) at **Mshe
 
 ## Turning a room off and on
 
+The behaviour below is the default (**Fan to Auto when off** = on). With that option **off**:
+
+- **Off** presses only *AC power* (confirmed like any command); the fan speed is left untouched and the desired state keeps the actual speed (no Auto expectation).
+- **On** presses only *AC power*. After the power change is confirmed it compares the actual fan with the remembered/desired speed; only if they differ does it wait the *Power → fan delay* and press the speed, with the same two-read verification and retries.
+
 - **Off from Home Assistant:** the integration remembers the room's current fan speed (per room, in HA storage, survives restarts), presses *AC power*, waits until the controller reports the AC off (re-reading every 2 s, up to 30 s), waits the *Power → fan delay* (default 5 s) and then presses *Fan Auto* if needed.
 - **On (cool) from Home Assistant:** *AC power*, wait until the AC reports on, wait the *Power → fan delay*, then press the remembered speed if it differs. Without a remembered speed it uses the last fan speed set from HA, otherwise it leaves the fan alone. (A fan press sent while the AC is still starting can be shown briefly by the controller and then dropped by the AC.)
 - If the power never changes, the fan is not pressed; the command is retried/reported like any other.
@@ -57,6 +62,7 @@ The portal's controller accepts **pulse** commands. Each *Temp Up/Down* pulse mo
 | Minimum / maximum target temperature | 18 / 30 °C | 10–35 °C, 0.5 steps | Limits of the thermostat cards. |
 | Polling interval | 300 s (5 min) | 15–600 s | How often the portal is polled. Commands get their own refreshes (~5 s after sending and at the end of the confirmation window), independent of this. Existing installs keep their saved value. |
 | Pulse spacing | 5.0 s | 0.5–10 s, 0.5 steps | Time between consecutive Temp Up/Down presses; the AC misses presses sent too fast. |
+| Fan to Auto when off | on | on / off | Off: fan Auto + speed remembered; on: speed re-applied. When disabled, only power is pressed (see above). |
 | Power → fan delay | 5 s | 0–30 s | Wait after the power change is confirmed, before the fan press. |
 | Automatic retries | 2 | 0–5 (0 = off) | Re-sends a command the AC did not confirm (see below). |
 | On external change | restore + notify | restore + notify / restore / notify / ignore | What to do when the wall panel, the portal or a power outage changes a room. |

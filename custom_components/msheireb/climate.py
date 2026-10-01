@@ -24,6 +24,8 @@ from .const import (
     CONF_MIN_TEMP,
     DEFAULT_MAX_TEMP,
     DEFAULT_MIN_TEMP,
+    CONF_FAN_AUTO_WHEN_OFF,
+    DEFAULT_FAN_AUTO_WHEN_OFF,
     FAN_ROLES,
     ROLE_FAN_AUTO,
     OPTIMISTIC_TIMEOUT,
@@ -88,6 +90,7 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
     ) -> None:
         super().__init__(coordinator, contract_id)
         self._zone_key = zone.key
+        self._entry = entry
         self._attr_unique_id = f"{contract_id}_{zone.device_id}_climate"
         self._attr_name = None  # main feature of the room device -> entity name = room name
         self._attr_device_info = room_device(zone, disambiguate)
@@ -193,10 +196,12 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             raise HomeAssistantError(f"{self.name}: controller not available")
         return zone
 
-    async def _command(self, zone: HvacZone, expected: dict[str, Any], description: str) -> None:
+    async def _command(self, zone: HvacZone, expected: dict[str, Any], description: str,
+                       fan_if_differs: bool = False) -> None:
         """Execute via the coordinator (which tracks, confirms, retries and records desired state)."""
         try:
-            await self.coordinator.async_command(zone, expected, description, self._pulse_interval)
+            await self.coordinator.async_command(zone, expected, description, self._pulse_interval,
+                                                 fan_if_differs=fan_if_differs)
         except MsheirebError as err:
             raise HomeAssistantError(f"{self.name}: command failed: {err}") from err
 
@@ -216,6 +221,8 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
                 raise HomeAssistantError(f"{self.name}: no power control")
             current_fan = zone.fan_mode(self._fan_roles)
             expected: dict[str, Any] = {KIND_POWER: want_on}
+            fan_auto = bool(self._entry.options.get(CONF_FAN_AUTO_WHEN_OFF, DEFAULT_FAN_AUTO_WHEN_OFF))
+            keep_fan: str | None = None  # 'Fan to Auto when off' disabled: desired fan = actual
             if not want_on:
                 memory = drift.prev_fan.get(zone.key)
                 remembered = current_fan or drift.desired.get(zone.key, {}).get(KIND_FAN)
@@ -223,14 +230,20 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
                 # Auto (Auto may come from our own off-sequence, a drift restore or an AC restart).
                 if remembered and (memory is None or (zone.power is not False and remembered != ROLE_FAN_AUTO)):
                     drift.remember_fan(zone.key, remembered)
-                if ROLE_FAN_AUTO in self._fan_roles:
+                if fan_auto and ROLE_FAN_AUTO in self._fan_roles:
                     expected[KIND_FAN] = ROLE_FAN_AUTO
+                elif not fan_auto:
+                    keep_fan = current_fan  # power only; the fan speed is left untouched
             else:
                 fan = drift.prev_fan.get(zone.key) or drift.desired.get(zone.key, {}).get(KIND_FAN)
-                if fan in self._fan_roles:
-                    expected[KIND_FAN] = fan
-                else:
+                if fan not in self._fan_roles:
                     drift.forget_desired(zone.key, KIND_FAN)  # unknown: leave the fan as it is
+                else:
+                    # with 'Fan to Auto when off' disabled the speed is only pressed if the actual
+                    # speed (read after the power change) differs from the remembered/desired one
+                    expected[KIND_FAN] = fan
+            if keep_fan:
+                drift.set_desired(zone.key, {KIND_FAN: keep_fan})
             if self.coordinator._zone_matches(zone, expected):
                 self.coordinator.async_set_desired(zone.key, expected)
                 for name in ("power", "fan"):
@@ -239,11 +252,12 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
                 return
             # show the intent right away; the actual readings win after the command settles
             self._set_opt("power", want_on)
-            if KIND_FAN in expected:
+            if KIND_FAN in expected and fan_auto:
                 self._set_opt("fan", expected[KIND_FAN])
             parts = ", ".join(f"{k}={v}" for k, v in expected.items())
             try:
-                await self._command(zone, expected, f"set_hvac_mode {hvac_mode} ({parts})")
+                await self._command(zone, expected, f"set_hvac_mode {hvac_mode} ({parts})",
+                                    fan_if_differs=want_on and not fan_auto)
             except HomeAssistantError:
                 self._optimistic.pop("power", None)
                 self._optimistic.pop("fan", None)

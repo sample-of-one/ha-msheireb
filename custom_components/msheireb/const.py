@@ -33,6 +33,8 @@ PULSE_INTERVAL = 5.0  # default; see CONF_PULSE_INTERVAL
 PULSES_BETWEEN_READS = 3  # re-read setpoint every N pulses
 REFRESH_AFTER_COMMAND = 5.0  # seconds
 # Power -> fan sequencing (real unit: a fan press sent while the AC is still starting is lost)
+CONF_FAN_AUTO_WHEN_OFF = "fan_auto_when_off"
+DEFAULT_FAN_AUTO_WHEN_OFF = True  # off: fan -> Auto, on: re-apply the remembered speed
 CONF_POWER_FAN_DELAY = "power_fan_delay"
 DEFAULT_POWER_FAN_DELAY = 5  # seconds after power is confirmed before the fan press
 POWER_FAN_DELAY_MAX = 30

@@ -46,6 +46,8 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_POWER_FAN_DELAY,
     DEFAULT_POWER_FAN_DELAY,
+    CONF_FAN_AUTO_WHEN_OFF,
+    DEFAULT_FAN_AUTO_WHEN_OFF,
     POWER_FAN_DELAY_MAX,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_TEMP,
@@ -215,6 +217,10 @@ class MsheirebOptionsFlow(OptionsFlow):
                     default=_clamp(opts.get(CONF_PULSE_INTERVAL), PULSE_INTERVAL_MIN, PULSE_INTERVAL_MAX,
                                    DEFAULT_PULSE_INTERVAL),
                 ): _num(PULSE_INTERVAL_MIN, PULSE_INTERVAL_MAX, 0.5, "s"),
+                vol.Required(
+                    CONF_FAN_AUTO_WHEN_OFF,
+                    default=bool(opts.get(CONF_FAN_AUTO_WHEN_OFF, DEFAULT_FAN_AUTO_WHEN_OFF)),
+                ): BooleanSelector(),
                 vol.Required(
                     CONF_POWER_FAN_DELAY,
                     default=int(_clamp(opts.get(CONF_POWER_FAN_DELAY), 0, POWER_FAN_DELAY_MAX,

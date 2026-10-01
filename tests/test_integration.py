@@ -203,6 +203,8 @@ async def test_options_use_selectors_and_store_ints(hass):
             (lo, hi, step, unit, mode), key
     assert isinstance(sel["external_change"], SelectSelector)
     assert isinstance(sel["adopt_external"], BooleanSelector) and isinstance(sel["notifications"], BooleanSelector)
+    assert isinstance(sel["fan_auto_when_off"], BooleanSelector)
+    assert next(k for k in schema if k == "fan_auto_when_off").default() is True
 
     # NumberSelector hands back floats: they must be stored as int where the option is whole-number
     result = await hass.config_entries.options.async_configure(result["flow_id"], {

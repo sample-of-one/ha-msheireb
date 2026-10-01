@@ -39,6 +39,7 @@ class RealisticAc:
         self.echo = None  # (fan, until): reading echoes a press the AC will drop
         self.ignore_fan = False
         self.extra_on = None  # inject a second ON fan reading (ambiguous controller state)
+        self.resets_fan_on_start = True
         self.presses = []
 
     def _settle(self):
@@ -48,7 +49,8 @@ class RealisticAc:
             self.pending_power_at = None
             if self.power:
                 self.starting_until = now + self.startup
-                self.fan = "auto"  # the unit comes up in Auto
+                if self.resets_fan_on_start:
+                    self.fan = "auto"  # the unit comes up in Auto
         if self.echo and now >= self.echo[1]:
             self.echo = None
 
@@ -239,3 +241,62 @@ async def test_debug_log_has_raw_fan_readings(hass, ac, freezer, caplog):
     await _setup(hass)
     assert any("fan readings={'auto': False, 'low': True, 'medium': False, 'high': False} -> fan_mode=low" in r.getMessage()
                for r in caplog.records)
+
+
+# ---------------------------------------------------------------- 'Fan to Auto when off' disabled
+OFF_MODE = {"fan_auto_when_off": False}
+
+
+async def test_option_off_turn_off_sends_only_power_and_keeps_fan(hass, ac, freezer):
+    ac.power, ac.fan = True, "medium"
+    entry, coord = await _setup(hass, OFF_MODE)
+    await _svc(hass, "turn_off")
+    assert ac.presses == ["power"]  # no Fan Auto press
+    assert coord.drift.desired[KEY] == {"power": False, "fan": "medium"}  # actual speed, no Auto expectation
+    await _advance(hass, freezer, 15)  # power confirmed by the post-command refresh
+    assert not ac.power and ac.fan == "medium"
+    assert hass.states.get(LAST).state == "confirmed"
+    assert _state(hass) == ("off", "medium")
+
+
+async def test_option_off_turn_on_power_only_when_speed_kept(hass, ac, freezer):
+    ac.power, ac.fan, ac.resets_fan_on_start = True, "medium", False
+    entry, coord = await _setup(hass, OFF_MODE)
+    await _svc(hass, "turn_off")
+    await _advance(hass, freezer, 15)
+    await _svc(hass, "turn_on")
+    assert ac.presses == ["power", "power"]  # no fan press on/off
+    await _advance(hass, freezer, 15)
+    rec = coord.health.commands[KEY]
+    assert rec.result == "confirmed" and "fan" not in rec.expected
+    assert _state(hass) == ("cool", "medium")
+
+
+async def test_option_off_turn_on_presses_fan_only_if_actual_differs(hass, ac, freezer):
+    ac.power, ac.fan = True, "medium"  # this unit comes up in Auto after power-on
+    entry, coord = await _setup(hass, OFF_MODE)
+    await _svc(hass, "turn_off")
+    await _advance(hass, freezer, 15)
+    await _svc(hass, "turn_on")
+    assert ac.presses == ["power", "power", "medium"]  # differs after power-on -> delay + verified fan
+    assert ac.fan == "medium"
+    await _advance(hass, freezer, 15)
+    assert coord.health.commands[KEY].result == "confirmed"
+    assert _state(hass) == ("cool", "medium")
+
+
+async def test_option_off_fan_change_while_off_no_drift(hass, ac, freezer):
+    ac.power, ac.fan = True, "medium"
+    entry, coord = await _setup(hass, OFF_MODE)
+    await _svc(hass, "turn_off")
+    await _advance(hass, freezer, 15)
+    ac.fan = "low"  # changed at the wall panel while off
+    await _advance(hass, freezer, 700, step=10)
+    assert coord.drift.events == 0 and ac.presses == ["power"]
+
+
+async def test_option_on_default_unchanged(hass, ac, freezer):
+    ac.power, ac.fan = True, "medium"
+    entry, coord = await _setup(hass)  # default: Fan to Auto when off = on
+    await _svc(hass, "turn_off")
+    assert ac.presses == ["power", "auto"]
