@@ -107,10 +107,16 @@ class HvacZone:
         return self.digital.get(ROLE_POWER)
 
     def fan_mode(self, roles: tuple[str, ...]) -> str | None:
-        for role in roles:
-            if self.digital.get(role):
-                return role
-        return None
+        """Actual fan mode from the digital readings: exactly one fan reading must be ON.
+
+        Several ON at once (e.g. Auto + High) or none is ambiguous -> None (unknown), so a
+        command can never be confirmed (and drift never triggered) from an unclear reading.
+        """
+        on = [role for role in roles if self.digital.get(role)]
+        return on[0] if len(on) == 1 else None
+
+    def fan_readings(self, roles: tuple[str, ...]) -> dict[str, bool | None]:
+        return {role: self.digital.get(role) for role in roles if role in self.digital}
 
     @property
     def is_hvac(self) -> bool:

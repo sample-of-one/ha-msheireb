@@ -291,7 +291,8 @@ async def test_power_retry_never_blindly_toggles(hass):
     entry, coord, api = await _setup(hass)
     FakeApi.drop_pulses = 1
     await hass.services.async_call("climate", "turn_off", {"entity_id": DINING}, blocking=True)
-    assert [c["sn"] for c in api.commands] == [1, 2]  # power (dropped by the AC), then fan auto
+    # power press dropped by the AC -> power never changes -> the fan is NOT pressed
+    assert [c["sn"] for c in api.commands] == [1]
     # meanwhile the AC was switched off at the wall panel
     for d in api.state["rooms"][0]["devices"][0]["status"]["digital"]:
         if d["label"] == "HVAC AC":
@@ -301,8 +302,9 @@ async def test_power_retry_never_blindly_toggles(hass):
     rec = coord.health.commands["4242_501"]
     rec.sent_monotonic -= rec.confirm_timeout + 1
     await coord._async_retry(rec)
-    assert api.commands == []  # state already matches -> no toggle
-    assert rec.result == "confirmed" and rec.retries == 0
+    assert [c["sn"] for c in api.commands] == [2]  # power already off -> no toggle; only Fan Auto
+    await coord.async_refresh(); await hass.async_block_till_done()
+    assert rec.result == "confirmed" and rec.retries == 1
 
 
 async def test_power_retry_resends_when_still_different(hass):
@@ -311,7 +313,7 @@ async def test_power_retry_resends_when_still_different(hass):
     await hass.services.async_call("climate", "turn_off", {"entity_id": DINING}, blocking=True)
     api.commands.clear()
     rec = await _expire(hass, coord)
-    assert [c["sn"] for c in api.commands] == [1] and rec.retries == 1
+    assert [c["sn"] for c in api.commands] == [1, 2] and rec.retries == 1  # power, then (after it changed) fan
     await coord.async_refresh(); await hass.async_block_till_done()
     assert st(hass, LAST).state == "confirmed"
     assert st(hass, DINING).state == "off"

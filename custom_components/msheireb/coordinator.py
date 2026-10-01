@@ -35,6 +35,12 @@ from .const import (
     CONF_MAX_RETRIES,
     CONF_SCAN_INTERVAL,
     CONFIRM_TIMEOUT,
+    CONF_POWER_FAN_DELAY,
+    DEFAULT_POWER_FAN_DELAY,
+    FAN_VERIFY_DELAY,
+    FAN_VERIFY_READS,
+    POWER_CONFIRM_MAX,
+    POWER_POLL_INTERVAL,
     DEFAULT_MAX_RETRIES,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -98,6 +104,8 @@ class CommandRecord:
     result: str = CMD_PENDING
     confirmed_after_s: float | None = None
     error: str | None = None
+    fan_matches: int = 0  # consecutive reads (>= FAN_VERIFY_DELAY apart) showing the expected fan
+    last_fan_press: float | None = None  # monotonic
 
     def as_attributes(self) -> dict[str, Any]:
         return {
@@ -109,6 +117,7 @@ class CommandRecord:
             "confirm_timeout_s": round(self.confirm_timeout, 1),
             "retries": self.retries,
             "confirmed_after_s": self.confirmed_after_s,
+            "fan_verified_reads": self.fan_matches,
             "error": self.error,
         }
 
@@ -152,6 +161,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         self._command_locks: dict[int, asyncio.Lock] = {}
         self._cancel_refresh: CALLBACK_TYPE | None = None
         self._cancel_confirm: dict[str, CALLBACK_TYPE] = {}
+        self._last_fan_press: dict[str, float] = {}
         from .drift import DriftManager
 
         self.drift = DriftManager(hass, self)
@@ -255,6 +265,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         cd.raw_smart_home = smart_home
         cd.apartment_ip = (smart_home.get("apartment_ip") or "").strip() or None
         cd.zones = parse_smart_home(cid, smart_home)
+        self._log_fan(cd.zones.values())
         if cd.apartment_ip:
             try:
                 status = await self.api.async_get_controller_status(cd.apartment_ip)
@@ -330,9 +341,21 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         """Fresh read of one zone (used between temperature pulses)."""
         smart_home = await self.api.async_get_smart_home(zone.contract_id)
         fresh = parse_smart_home(zone.contract_id, smart_home).get(zone.key)
+        if fresh is not None:
+            self._log_fan([fresh])
         if fresh is not None and self.data and zone.contract_id in self.data:
             self.data[zone.contract_id].zones[zone.key] = fresh
         return fresh
+
+    @staticmethod
+    def _log_fan(zones: Any) -> None:
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+        for z in zones:
+            raw = z.fan_readings(FAN_ROLES)
+            mode = z.fan_mode(FAN_ROLES)
+            _LOGGER.debug("%s: power=%s fan readings=%s -> fan_mode=%s%s", z.room_name, z.power, raw, mode,
+                          " (AMBIGUOUS)" if mode is None and any(raw.values()) else "")
 
     async def async_pulse(self, zone: HvacZone, role: str) -> dict[str, Any]:
         """Send a PULSE for a role of a zone (sn discovered from labels)."""
@@ -361,6 +384,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         kind: str | None = None,
         value: Any = None,
         retryable: bool = True,
+        extra_wait: float = 0.0,
     ) -> CommandRecord:
         """Track a command. Timeout scales with the presses: pulses x spacing + CONFIRM_TIMEOUT,
         measured from the first press."""
@@ -373,7 +397,8 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
             pulses=pulses,
             started_at=dt_util.utcnow(),
             sent_monotonic=started_monotonic if started_monotonic is not None else now,
-            confirm_timeout=len(pulses) * max(0.0, spacing) + CONFIRM_TIMEOUT,
+            confirm_timeout=len(pulses) * max(0.0, spacing) + CONFIRM_TIMEOUT + extra_wait
+            + (FAN_VERIFY_DELAY if KIND_FAN in expected else 0.0),
             kind="multi" if retryable else None,
             value=None,
             spacing=spacing,
@@ -390,6 +415,19 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
             self._schedule_confirm_check(rec)
         self.notify_health()
         return rec
+
+    @callback
+    def _schedule_verify_refresh(self, rec: CommandRecord, delay: float) -> None:
+        key = f"verify_{rec.zone_key}"
+        if key in self._cancel_confirm:
+            return
+
+        @callback
+        def _fire(_now: Any) -> None:
+            self._cancel_confirm.pop(key, None)
+            self.hass.async_create_task(self.async_refresh())
+
+        self._cancel_confirm[key] = async_call_later(self.hass, max(0.5, delay), _fire)
 
     @callback
     def _schedule_confirm_check(self, rec: CommandRecord) -> None:
@@ -463,14 +501,54 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
 
     async def _execute_all(
         self, zone: HvacZone, expected: dict[str, Any], spacing: float, sent: list[dict[str, Any]]
-    ) -> None:
-        """Apply several targets in a safe order: power first, then setpoint, then fan."""
-        for kind in (KIND_POWER, KIND_TARGET, KIND_FAN):
+    ) -> float:
+        """Apply several targets in a safe order: power first, then setpoint, then fan.
+
+        After a power press, the remaining presses wait until the reported power has changed
+        (read every POWER_POLL_INTERVAL s, up to POWER_CONFIRM_MAX s) plus the 'Power -> fan
+        delay'; if the power never changes, nothing else is pressed (confirm/retry handles it).
+        Returns the seconds spent waiting (added to the confirmation window).
+        """
+        waited = 0.0
+        if KIND_POWER in expected:
+            before = len(sent)
+            await self._execute(zone, KIND_POWER, expected[KIND_POWER], spacing, sent)
+            if len(sent) > before and any(k in expected for k in (KIND_TARGET, KIND_FAN)):
+                t0 = time.monotonic()
+                fresh = await self._wait_for_power(zone, expected[KIND_POWER])
+                if fresh is None:
+                    _LOGGER.debug("%s: power did not change within %.0f s; not pressing the fan yet",
+                                  zone.room_name, POWER_CONFIRM_MAX)
+                    return time.monotonic() - t0
+                delay = self.power_fan_delay
+                _LOGGER.debug("%s: power confirmed %s; waiting %.1f s before the next press",
+                              zone.room_name, "on" if expected[KIND_POWER] else "off", delay)
+                await asyncio.sleep(delay)
+                zone = await self.async_read_zone(zone) or fresh
+                waited = time.monotonic() - t0
+        for kind in (KIND_TARGET, KIND_FAN):
             if kind in expected:
-                if sent and kind != KIND_POWER:
+                if sent and waited == 0.0:
                     await asyncio.sleep(max(0.0, spacing))  # keep presses spaced (AC misses fast presses)
                     zone = await self.async_read_zone(zone) or zone
+                before = len(sent)
                 await self._execute(zone, kind, expected[kind], spacing, sent)
+                if kind == KIND_FAN and len(sent) > before:
+                    self._last_fan_press[zone.key] = time.monotonic()
+        return waited
+
+    async def _wait_for_power(self, zone: HvacZone, want: bool) -> HvacZone | None:
+        deadline = time.monotonic() + POWER_CONFIRM_MAX
+        while time.monotonic() < deadline:
+            await asyncio.sleep(POWER_POLL_INTERVAL)
+            fresh = await self.async_read_zone(zone)
+            if fresh is not None and fresh.power is want:
+                return fresh
+        return None
+
+    @property
+    def power_fan_delay(self) -> float:
+        return float(self.config_entry.options.get(CONF_POWER_FAN_DELAY, DEFAULT_POWER_FAN_DELAY))
 
     async def async_command(
         self,
@@ -485,15 +563,17 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
             self.async_set_desired(zone.key, expected)
         sent: list[dict[str, Any]] = []
         started = time.monotonic()
+        self._last_fan_press.pop(zone.key, None)
         try:
-            await self._execute_all(zone, expected, spacing, sent)
+            waited = await self._execute_all(zone, expected, spacing, sent)
         except MsheirebError as err:
             self.track_command(zone, description, dict(expected), sent, error=str(err),
                                started_monotonic=started, spacing=spacing)
             raise
         if sent:
-            self.track_command(zone, description, dict(expected), sent,
-                               started_monotonic=started, spacing=spacing)
+            rec = self.track_command(zone, description, dict(expected), sent,
+                                     started_monotonic=started, spacing=spacing, extra_wait=waited)
+            rec.last_fan_press = self._last_fan_press.get(zone.key)
         return sent
 
     async def _async_retry(self, rec: CommandRecord) -> None:
@@ -508,23 +588,37 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                     raise MsheirebError("zone no longer available")
                 fresh = await self.async_read_zone(zone) or zone
                 if self._zone_matches(fresh, rec.expected):
-                    self._confirm(rec)
+                    if KIND_FAN not in rec.expected or rec.fan_matches + 1 >= FAN_VERIFY_READS:
+                        self._confirm(rec)
+                        return
+                    # matches now but not verified twice yet: verify again instead of re-pressing
+                    rec.fan_matches = 1
+                    rec.sent_monotonic = time.monotonic()
+                    rec.confirm_timeout = CONFIRM_TIMEOUT
+                    self._schedule_verify_refresh(rec, FAN_VERIFY_DELAY)
+                    self._schedule_confirm_check(rec)
                     return
                 rec.retries += 1
                 self.health.command_retries += 1
                 new: list[dict[str, Any]] = []
                 started = time.monotonic()
+                waited = 0.0
+                self._last_fan_press.pop(rec.zone_key, None)
                 try:
-                    await self._execute_all(fresh, rec.expected, rec.spacing, new)
+                    waited = await self._execute_all(fresh, rec.expected, rec.spacing, new)
                 finally:
                     rec.pulses.extend(new)
+                    if rec.zone_key in self._last_fan_press:
+                        rec.last_fan_press = self._last_fan_press[rec.zone_key]
+                        rec.fan_matches = 0
                 if not new:
                     # nothing to send, yet state differs (e.g. unknown setpoint): treat as final
                     self._fail(rec, None)
                     return
                 rec.sent_monotonic = started
-                rec.confirm_timeout = len(new) * max(0.0, rec.spacing) + CONFIRM_TIMEOUT
-                _LOGGER.debug("Retry %s for %s: sent %s pulse(s)", rec.retries, rec.room, len(new))
+                rec.confirm_timeout = (len(new) * max(0.0, rec.spacing) + CONFIRM_TIMEOUT + waited
+                                       + (FAN_VERIFY_DELAY if KIND_FAN in rec.expected else 0.0))
+                _LOGGER.debug("Retry %s for %s: sent %s", rec.retries, rec.room, [p["label"] for p in new])
                 self._schedule_confirm_check(rec)
         except MsheirebError as err:
             rec.result = CMD_FAILED
@@ -541,8 +635,9 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         rec.confirmed_after_s = round(time.monotonic() - (rec.first_monotonic or rec.sent_monotonic), 1)
         self.health.commands_confirmed += 1
         self.alerts.clear(f"command_{rec.zone_key}")
-        if rec.zone_key in self._cancel_confirm:
-            self._cancel_confirm.pop(rec.zone_key)()
+        for key in (rec.zone_key, f"verify_{rec.zone_key}"):
+            if key in self._cancel_confirm:
+                self._cancel_confirm.pop(key)()
 
     def _fail(self, rec: CommandRecord, error: str | None) -> None:
         # don't let drift-restore immediately repeat a command that just failed
@@ -574,8 +669,23 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                 continue
             zone = zones.get(key)
             if zone is not None and self._zone_matches(zone, rec.expected):
-                self._confirm(rec)
-            elif now - rec.sent_monotonic >= rec.confirm_timeout:
+                if KIND_FAN not in rec.expected:
+                    self._confirm(rec)
+                    continue
+                # fan: the reading must be taken >= FAN_VERIFY_DELAY after the press and repeat on a
+                # second read (a controller can echo a press the AC then drops, e.g. while starting)
+                if rec.last_fan_press is not None and now - rec.last_fan_press < FAN_VERIFY_DELAY - 0.5:
+                    self._schedule_verify_refresh(rec, FAN_VERIFY_DELAY - (now - rec.last_fan_press))
+                    continue
+                rec.fan_matches += 1
+                if rec.fan_matches >= FAN_VERIFY_READS:
+                    self._confirm(rec)
+                else:
+                    self._schedule_verify_refresh(rec, FAN_VERIFY_DELAY)
+                continue
+            if zone is not None and KIND_FAN in rec.expected:
+                rec.fan_matches = 0
+            if now - rec.sent_monotonic >= rec.confirm_timeout:
                 if rec.kind and rec.retries < self.max_retries:
                     rec.retrying = True
                     self.config_entry.async_create_task(

@@ -194,6 +194,7 @@ async def test_options_use_selectors_and_store_ints(hass):
         "max_temp": (10, 35, 0.5, "°C", "box"),
         "scan_interval": (15, 600, 1, "s", "box"),
         "drift_grace": (0, 3600, 1, "s", "box"),
+        "power_fan_delay": (0, 30, 1, "s", "box"),
     }
     for key, (lo, hi, step, unit, mode) in expect.items():
         assert isinstance(sel[key], NumberSelector), key
@@ -206,10 +207,10 @@ async def test_options_use_selectors_and_store_ints(hass):
     # NumberSelector hands back floats: they must be stored as int where the option is whole-number
     result = await hass.config_entries.options.async_configure(result["flow_id"], {
         "min_temp": 18.0, "max_temp": 27.0, "scan_interval": 45.0, "pulse_interval": 1.5, "max_retries": 3.0,
-        "external_change": "notify", "drift_grace": 90.0, "adopt_external": False, "notifications": True})
+        "external_change": "notify", "drift_grace": 90.0, "power_fan_delay": 7.0, "adopt_external": False, "notifications": True})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     opts = entry.options
-    for key, val in (("scan_interval", 45), ("max_retries", 3), ("drift_grace", 90)):
+    for key, val in (("scan_interval", 45), ("max_retries", 3), ("drift_grace", 90), ("power_fan_delay", 7)):
         assert opts[key] == val and type(opts[key]) is int, key
     for key, val in (("min_temp", 18.0), ("max_temp", 27.0), ("pulse_interval", 1.5)):
         assert opts[key] == val and type(opts[key]) is float, key

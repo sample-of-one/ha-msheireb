@@ -42,7 +42,8 @@
           "max_retries": "Automatic retries for unconfirmed commands",
           "external_change": "On external change",
           "drift_grace": "Grace period before acting on an external change",
-          "adopt_external": "Adopt external changes as the new desired state"
+          "adopt_external": "Adopt external changes as the new desired state",
+          "power_fan_delay": "Power → fan delay"
         },
         "data_description": {
           "min_temp": "Lowest setpoint allowed.",
@@ -53,7 +54,8 @@
           "max_retries": "Re-sends unconfirmed commands (0 = off).",
           "external_change": "What to do when a room is changed outside HA.",
           "drift_grace": "How long a change must persist before acting.",
-          "adopt_external": "Keep external changes instead of restoring."
+          "adopt_external": "Keep external changes instead of restoring.",
+          "power_fan_delay": "Wait after power changes before the fan press."
         }
       }
     },

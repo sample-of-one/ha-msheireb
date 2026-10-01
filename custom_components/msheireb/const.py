@@ -32,6 +32,14 @@ RAW_TEMP_SCALE = 100  # API reports C x 100
 PULSE_INTERVAL = 5.0  # default; see CONF_PULSE_INTERVAL
 PULSES_BETWEEN_READS = 3  # re-read setpoint every N pulses
 REFRESH_AFTER_COMMAND = 5.0  # seconds
+# Power -> fan sequencing (real unit: a fan press sent while the AC is still starting is lost)
+CONF_POWER_FAN_DELAY = "power_fan_delay"
+DEFAULT_POWER_FAN_DELAY = 5  # seconds after power is confirmed before the fan press
+POWER_FAN_DELAY_MAX = 30
+POWER_POLL_INTERVAL = 2.0  # seconds between reads while waiting for the power change
+POWER_CONFIRM_MAX = 30.0  # give up waiting for the power change after this
+FAN_VERIFY_DELAY = 5.0  # re-read this long after a fan press before it can count as confirmed
+FAN_VERIFY_READS = 2  # consecutive matching reads needed to confirm a fan change
 OPTIMISTIC_TIMEOUT = 25.0  # seconds before an unconfirmed optimistic value is dropped
 TOKEN_REFRESH_MARGIN = 600  # refresh access token this many seconds before expiry
 DEFAULT_TOKEN_LIFETIME = 86400

@@ -44,6 +44,9 @@ from .const import (
     CONF_PULSE_INTERVAL,
     CONF_REFRESH_TOKEN,
     CONF_SCAN_INTERVAL,
+    CONF_POWER_FAN_DELAY,
+    DEFAULT_POWER_FAN_DELAY,
+    POWER_FAN_DELAY_MAX,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MAX_TEMP,
     DEFAULT_MIN_TEMP,
@@ -149,7 +152,7 @@ TEMP_MIN_LIMIT = 10.0
 TEMP_MAX_LIMIT = 35.0
 SCAN_MIN, SCAN_MAX = 15, 600
 GRACE_MAX = 3600
-INT_OPTIONS = (CONF_SCAN_INTERVAL, CONF_MAX_RETRIES, CONF_DRIFT_GRACE)
+INT_OPTIONS = (CONF_SCAN_INTERVAL, CONF_MAX_RETRIES, CONF_DRIFT_GRACE, CONF_POWER_FAN_DELAY)
 FLOAT_OPTIONS = (CONF_MIN_TEMP, CONF_MAX_TEMP, CONF_PULSE_INTERVAL)
 
 EMAIL_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="username"))
@@ -212,6 +215,11 @@ class MsheirebOptionsFlow(OptionsFlow):
                     default=_clamp(opts.get(CONF_PULSE_INTERVAL), PULSE_INTERVAL_MIN, PULSE_INTERVAL_MAX,
                                    DEFAULT_PULSE_INTERVAL),
                 ): _num(PULSE_INTERVAL_MIN, PULSE_INTERVAL_MAX, 0.5, "s"),
+                vol.Required(
+                    CONF_POWER_FAN_DELAY,
+                    default=int(_clamp(opts.get(CONF_POWER_FAN_DELAY), 0, POWER_FAN_DELAY_MAX,
+                                       DEFAULT_POWER_FAN_DELAY)),
+                ): _num(0, POWER_FAN_DELAY_MAX, 1, "s"),
                 vol.Required(
                     CONF_MAX_RETRIES,
                     default=int(_clamp(opts.get(CONF_MAX_RETRIES), 0, MAX_RETRIES_LIMIT, DEFAULT_MAX_RETRIES)),

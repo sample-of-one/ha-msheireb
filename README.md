@@ -24,11 +24,14 @@ Unofficial custom integration for the in-apartment AC (fan coil units) at **Mshe
 
 ## Turning a room off and on
 
-- **Off from Home Assistant:** the integration first remembers the room's current fan speed (stored per room in HA storage, so it survives restarts), then presses *AC power* and, if the fan is not already on Auto, *Fan Auto*, in that order, spaced by the pulse spacing.
-- **On (cool) from Home Assistant:** it presses *AC power*, then re-applies the remembered fan speed if it differs. Without a remembered speed it uses the last fan speed set from HA, and otherwise leaves the fan as it is.
-- Changing the fan from HA while the room is off updates the remembered speed for the next turn-on.
-- The desired state used for external-change detection follows this: *off + fan Auto* while off, the restored speed after turning on. While a room is off, fan differences are ignored (no external-change alerts); turning it on at the wall panel is still detected.
-- Each part is only pressed when the reported state differs, and the command is confirmed/retried like any other.
+- **Off from Home Assistant:** the integration remembers the room's current fan speed (per room, in HA storage, survives restarts), presses *AC power*, waits until the controller reports the AC off (re-reading every 2 s, up to 30 s), waits the *Power → fan delay* (default 5 s) and then presses *Fan Auto* if needed.
+- **On (cool) from Home Assistant:** *AC power*, wait until the AC reports on, wait the *Power → fan delay*, then press the remembered speed if it differs. Without a remembered speed it uses the last fan speed set from HA, otherwise it leaves the fan alone. (A fan press sent while the AC is still starting can be shown briefly by the controller and then dropped by the AC.)
+- If the power never changes, the fan is not pressed; the command is retried/reported like any other.
+- **Fan verification:** a fan change only counts as confirmed when the actual readings show it on **two reads at least 5 s apart**, the first at least 5 s after the press. Otherwise only the fan is pressed again (up to *Automatic retries*), then a notification is shown.
+- The fan mode shown in HA is the **actual** reported one. Exactly one fan reading must be ON; several ON at once (e.g. Auto + High) is treated as unknown, never as a match. The requested value is shown only while the command is running, then the actual reading wins.
+- The remembered speed is only replaced by a real speed taken while the room is on, or by a fan speed you choose in HA. It is never replaced by Auto from the off-sequence, a drift restore or an AC restart.
+- The desired state used for external-change detection is *off + fan Auto* while off and the restored speed after turning on. While a room is off, fan differences are ignored; turning it on at the wall panel is still detected.
+- Debug logging shows the raw fan readings and the derived fan mode for every read.
 
 ## How it controls the AC
 The portal's controller accepts **pulse** commands. Each *Temp Up/Down* pulse moves the setpoint by 0.5 °C (verified). To set a temperature, the integration sends the needed number of Up/Down pulses one at a time, 5.0 s apart start-to-start by default (configurable 0.5–10 s; the real AC also registered 3 presses 1.2–1.5 s apart, so you can lower it for faster changes), and re-reads the setpoint every 3 pulses. It never sends more pulses than initially needed. Power and fan pulses are only sent when the reported state differs from the requested one. Control serial numbers are discovered from the control labels, not hard-coded. The UI updates optimistically and is reconciled by an extra refresh about 5 s after a command, independent of the polling interval.
@@ -54,6 +57,7 @@ The portal's controller accepts **pulse** commands. Each *Temp Up/Down* pulse mo
 | Minimum / maximum target temperature | 18 / 30 °C | 10–35 °C, 0.5 steps | Limits of the thermostat cards. |
 | Polling interval | 300 s (5 min) | 15–600 s | How often the portal is polled. Commands get their own refreshes (~5 s after sending and at the end of the confirmation window), independent of this. Existing installs keep their saved value. |
 | Pulse spacing | 5.0 s | 0.5–10 s, 0.5 steps | Time between consecutive Temp Up/Down presses; the AC misses presses sent too fast. |
+| Power → fan delay | 5 s | 0–30 s | Wait after the power change is confirmed, before the fan press. |
 | Automatic retries | 2 | 0–5 (0 = off) | Re-sends a command the AC did not confirm (see below). |
 | On external change | restore + notify | restore + notify / restore / notify / ignore | What to do when the wall panel, the portal or a power outage changes a room. |
 | Grace period | 60 s | 0–3600 s | How long a change must persist, **and** at least 2 polls, before acting. With 5-min polling that is about 5–10 min after the change. |

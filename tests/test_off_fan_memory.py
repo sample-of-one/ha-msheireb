@@ -88,7 +88,7 @@ async def test_off_remembers_fan_and_sets_auto_then_on_restores(hass, hass_stora
     await _svc(hass, "set_hvac_mode", hvac_mode="cool")
     assert _sns(api) == [POWER, HIGH]
     assert coord.drift.desired[KEY] == {"power": True, "fan": "high"}
-    assert KEY not in coord.drift.prev_fan
+    assert coord.drift.prev_fan[KEY] == "high"  # kept (only replaced by a real speed)
     await _poll(hass, coord)
     s = hass.states.get(DINING)
     assert s.state == "cool" and s.attributes["fan_mode"] == "high"

@@ -142,10 +142,13 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
                 "target": zone.setpoint,
                 "fan": zone.fan_mode(self._fan_roles),
             }
+            rec = self.coordinator.health.commands.get(self._zone_key)
+            pending = rec is not None and (rec.result == "pending" or rec.retrying)
             for name, (value, ts) in list(self._optimistic.items()):
-                if actual.get(name) == value or (
-                    now - ts > OPTIMISTIC_TIMEOUT and not self._lock.locked()  # keep while pulses run
-                ):
+                if self._lock.locked() or self.coordinator.command_lock(self._contract_id).locked():
+                    continue  # presses still running: keep showing the intent
+                # actual wins as soon as it matches, the command is settled, or it is too old
+                if actual.get(name) == value or not pending or now - ts > OPTIMISTIC_TIMEOUT:
                     self._optimistic.pop(name, None)
         super()._handle_coordinator_update()
 
@@ -214,11 +217,12 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             current_fan = zone.fan_mode(self._fan_roles)
             expected: dict[str, Any] = {KIND_POWER: want_on}
             if not want_on:
-                # don't overwrite an existing memory while already off (the fan may be our Auto)
-                if zone.power is not False or zone.key not in drift.prev_fan:
-                    remembered = current_fan or drift.desired.get(zone.key, {}).get(KIND_FAN)
-                    if remembered:
-                        drift.remember_fan(zone.key, remembered)
+                memory = drift.prev_fan.get(zone.key)
+                remembered = current_fan or drift.desired.get(zone.key, {}).get(KIND_FAN)
+                # Only remember a real speed taken while on; never replace a remembered speed with
+                # Auto (Auto may come from our own off-sequence, a drift restore or an AC restart).
+                if remembered and (memory is None or (zone.power is not False and remembered != ROLE_FAN_AUTO)):
+                    drift.remember_fan(zone.key, remembered)
                 if ROLE_FAN_AUTO in self._fan_roles:
                     expected[KIND_FAN] = ROLE_FAN_AUTO
             else:
@@ -229,19 +233,22 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
                     drift.forget_desired(zone.key, KIND_FAN)  # unknown: leave the fan as it is
             if self.coordinator._zone_matches(zone, expected):
                 self.coordinator.async_set_desired(zone.key, expected)
-                if want_on:
-                    drift.pop_remembered_fan(zone.key)
                 for name in ("power", "fan"):
                     self._optimistic.pop(name, None)
                 self.async_write_ha_state()
                 return
-            parts = ", ".join(f"{k}={v}" for k, v in expected.items())
-            await self._command(zone, expected, f"set_hvac_mode {hvac_mode} ({parts})")
-            if want_on:
-                drift.pop_remembered_fan(zone.key)
+            # show the intent right away; the actual readings win after the command settles
             self._set_opt("power", want_on)
             if KIND_FAN in expected:
                 self._set_opt("fan", expected[KIND_FAN])
+            parts = ", ".join(f"{k}={v}" for k, v in expected.items())
+            try:
+                await self._command(zone, expected, f"set_hvac_mode {hvac_mode} ({parts})")
+            except HomeAssistantError:
+                self._optimistic.pop("power", None)
+                self._optimistic.pop("fan", None)
+                self.async_write_ha_state()
+                raise
         self.coordinator.schedule_refresh_after_command()
 
     async def async_turn_on(self) -> None:
@@ -255,16 +262,13 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             raise HomeAssistantError(f"Unsupported fan mode {fan_mode}")
         async with self._lock, self.coordinator.command_lock(self._contract_id):
             zone = self._require_zone()
+            # an explicit choice from HA is what to re-apply on the next turn-on (on or off)
+            self.coordinator.drift.remember_fan(zone.key, fan_mode)
             if zone.fan_mode(self._fan_roles) == fan_mode:
-                if zone.power is False:
-                    self.coordinator.drift.remember_fan(zone.key, fan_mode)
                 self.coordinator.async_set_desired(zone.key, {KIND_FAN: fan_mode})
                 self._optimistic.pop("fan", None)
                 self.async_write_ha_state()
                 return
-            if zone.power is False:
-                # while off, the chosen speed is what to re-apply on the next turn-on
-                self.coordinator.drift.remember_fan(zone.key, fan_mode)
             await self._command(zone, {KIND_FAN: fan_mode}, f"set_fan_mode {fan_mode}")
             self._set_opt("fan", fan_mode)
         self.coordinator.schedule_refresh_after_command()
