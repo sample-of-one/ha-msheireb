@@ -46,7 +46,8 @@
           "power_fan_delay": "Power → fan delay",
           "fan_auto_when_off": "Fan to Auto when off",
           "unlock_enabled": "Enable door unlock button",
-          "power_settle": "Power settle time"
+          "power_settle": "Power settle time",
+          "fan_settle": "Fan settle time"
         },
         "data_description": {
           "min_temp": "Lowest setpoint allowed.",
@@ -61,7 +62,8 @@
           "power_fan_delay": "Wait after power changes before the fan press.",
           "fan_auto_when_off": "Off sets fan Auto; on restores the previous speed.",
           "unlock_enabled": "Allow the Unlock door button to open the door.",
-          "power_settle": "Wait after a power press before checking it."
+          "power_settle": "Wait after a power press before checking it.",
+          "fan_settle": "Wait after a fan press before checking it."
         }
       }
     },

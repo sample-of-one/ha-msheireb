@@ -169,17 +169,32 @@ async def test_turn_on_waits_for_power_then_delay_then_fan(hass, ac, freezer):
 async def test_v036_timing_echo_then_drop_is_not_confirmed_and_is_retried(hass, ac, freezer):
     """Fan pressed right after power (delay 0, long start-up): the reading echoes High, then Auto."""
     ac.startup = 8.0  # power applies at +7 s, starting until +15 s; settle 10 s + delay 0 -> press at +10 s
-    entry, coord = await _setup(hass, {"power_fan_delay": 0})
+    entry, coord = await _setup(hass, {"power_fan_delay": 0, "fan_settle": 5})
     coord.drift.prev_fan[KEY] = "high"
     await _svc(hass, "turn_on")
     assert ac.presses == ["power", "high"] and ac.echo is not None  # dropped by the starting AC
-    await _advance(hass, freezer, 6)  # first verify read still shows the echo (High)
+    await _advance(hass, freezer, 6)  # first verify read (after the 5 s fan settle) still shows the echo
     rec = coord.health.commands[KEY]
     assert rec.result == "pending"  # a single (echoed) reading never confirms
-    await _advance(hass, freezer, 40)  # second read shows Auto -> mismatch -> fan-only retry
+    await _advance(hass, freezer, 60)  # second read shows Auto -> mismatch -> fan-only retry
     assert ac.presses == ["power", "high", "high"]  # no extra power press
     assert rec.retries == 1 and rec.result == "confirmed" and ac.fan == "high"
     assert _state(hass) == ("cool", "high")
+
+
+async def test_default_fan_settle_skips_the_echo(hass, ac, freezer):
+    """Same slow start-up, default 10 s fan settle: the echo is gone before the first read."""
+    ac.startup = 8.0
+    entry, coord = await _setup(hass, {"power_fan_delay": 0})
+    coord.drift.prev_fan[KEY] = "high"
+    matches = _track_matches(coord)
+    await _svc(hass, "turn_on")
+    await _advance(hass, freezer, 90)
+    rec = coord.health.commands[KEY]
+    # the first counted read (>= 10 s after the press) already shows Auto -> retried, never confirmed on the echo
+    assert ac.presses == ["power", "high", "high"] and rec.retries == 1
+    assert rec.result == "confirmed" and ac.fan == "high"
+    _assert_verification_timing(ac, matches, 10)
 
 
 async def test_fan_never_applied_shows_actual_and_notifies(hass, ac, freezer):
@@ -373,3 +388,115 @@ async def test_drift_restore_settles_before_fan(hass, ac, freezer):
     t_power, t_fan = ac.press_times[n][1], ac.press_times[n + 1][1]
     assert _first_read_after(ac, t_power) >= 10 and t_fan - t_power >= 15
     assert not ac.power and ac.fan == "auto"
+
+
+# ---------------------------------------------------------------- fan settle time (fan is slow)
+def _track_matches(coord):
+    """Record (time, fan_matches) every time a matching fan read is counted."""
+    import time as _t
+
+    seen = []
+    orig = coord._evaluate_commands
+
+    def wrapper(data):
+        before = {k: r.fan_matches for k, r in coord.health.commands.items()}
+        orig(data)
+        for k, r in coord.health.commands.items():
+            if r.fan_matches > before.get(k, 0):
+                seen.append((_t.monotonic(), r.fan_matches))
+
+    coord._evaluate_commands = wrapper
+    return seen
+
+
+def _fan_presses(ac):
+    return [t for role, t in ac.press_times if role != "power"]
+
+
+def _assert_verification_timing(ac, matches, settle):
+    """Every counted read 1 comes >= settle after the latest fan press, read 2 >= 5 s after read 1."""
+    assert matches
+    for i, (t, n) in enumerate(matches):
+        press = max(p for p in _fan_presses(ac) if p <= t)
+        if n == 1:
+            assert t - press >= settle - 0.5, (t - press, settle)
+        else:
+            assert t - matches[i - 1][0] >= 4.5
+
+
+async def test_fan_settle_direct_fan_change(hass, ac, freezer):
+    ac.power, ac.fan = True, "low"
+    entry, coord = await _setup(hass)  # default fan settle 10 s
+    matches = _track_matches(coord)
+    await hass.services.async_call("climate", "set_fan_mode", {"entity_id": DINING, "fan_mode": "high"},
+                                   blocking=True)
+    await hass.async_block_till_done()
+    assert ac.presses == ["high"]
+    rec = coord.health.commands[KEY]
+    assert rec.confirm_timeout >= 1 + 20 + 10 + 5  # press + base + settle + 2nd read gap
+    await _advance(hass, freezer, 9)
+    assert rec.fan_matches == 0 and rec.result == "pending"  # nothing counted during the settle time
+    await _advance(hass, freezer, 3)
+    assert rec.fan_matches == 1 and rec.result == "pending"
+    await _advance(hass, freezer, 6)
+    assert rec.result == "confirmed" and rec.confirmed_after_s >= 15
+    _assert_verification_timing(ac, matches, 10)
+    assert _state(hass) == ("cool", "high")
+
+
+async def test_fan_settle_option_long_is_not_flagged_early(hass, ac, freezer):
+    ac.power, ac.fan = True, "low"
+    entry, coord = await _setup(hass, {"fan_settle": 45, "max_retries": 0})
+    matches = _track_matches(coord)
+    await hass.services.async_call("climate", "set_fan_mode", {"entity_id": DINING, "fan_mode": "medium"},
+                                   blocking=True)
+    await hass.async_block_till_done()
+    rec = coord.health.commands[KEY]
+    await _advance(hass, freezer, 44)
+    assert rec.result == "pending" and rec.fan_matches == 0
+    assert _state(hass) == ("cool", "medium")  # intent kept while verifying
+    await _advance(hass, freezer, 8)
+    assert rec.result == "confirmed"
+    _assert_verification_timing(ac, matches, 45)
+    notes = {k for k in _async_get_or_create_notifications(hass) if k.startswith(DOMAIN)}
+    assert not any("command_" in k for k in notes)
+
+
+async def test_fan_settle_turn_off_auto_and_turn_on_restore(hass, ac, freezer):
+    ac.power, ac.fan = True, "medium"
+    entry, coord = await _setup(hass)
+    matches = _track_matches(coord)
+    await _svc(hass, "turn_off")
+    assert ac.presses == ["power", "auto"]
+    await _advance(hass, freezer, 20)
+    assert coord.health.commands[KEY].result == "confirmed"
+    await _svc(hass, "turn_on")
+    assert ac.presses[2:] == ["power", "medium"]
+    await _advance(hass, freezer, 20)
+    assert coord.health.commands[KEY].result == "confirmed"
+    assert len(matches) == 4
+    _assert_verification_timing(ac, matches, 10)
+
+
+async def test_fan_settle_on_retry_and_drift_restore(hass, ac, freezer):
+    ac.power, ac.fan = True, "low"
+    entry, coord = await _setup(hass, {"max_retries": 2})
+    matches = _track_matches(coord)
+    ac.ignore_fan = True  # first fan press lost by the AC
+    await hass.services.async_call("climate", "set_fan_mode", {"entity_id": DINING, "fan_mode": "high"},
+                                   blocking=True)
+    await hass.async_block_till_done()
+    ac.ignore_fan = False
+    rec = coord.health.commands[KEY]
+    await _advance(hass, freezer, 80)
+    assert ac.presses == ["high", "high"] and rec.retries == 1 and rec.result == "confirmed"
+    _assert_verification_timing(ac, matches, 10)
+    # drift restore of the fan also waits the settle time before verifying
+    matches.clear()
+    ac.fan = "low"  # changed at the wall panel
+    n = len(ac.presses)
+    await _advance(hass, freezer, 700, step=10)
+    assert ac.presses[n:] == ["high"] and ac.fan == "high"
+    await _advance(hass, freezer, 30)
+    assert coord.health.commands[KEY].result == "confirmed"
+    _assert_verification_timing(ac, matches, 10)

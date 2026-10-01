@@ -149,9 +149,11 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             pending = rec is not None and (rec.result == "pending" or rec.retrying)
             for name, (value, ts) in list(self._optimistic.items()):
                 if self._lock.locked() or self.coordinator.command_lock(self._contract_id).locked():
+                    self._optimistic[name] = (value, now)  # age counts from the end of the presses
                     continue  # presses still running: keep showing the intent
                 # actual wins as soon as it matches, the command is settled, or it is too old
-                if actual.get(name) == value or not pending or now - ts > OPTIMISTIC_TIMEOUT:
+                limit = OPTIMISTIC_TIMEOUT + (self.coordinator.fan_verify_window if name == "fan" else 0.0)
+                if actual.get(name) == value or not pending or now - ts > limit:
                     self._optimistic.pop(name, None)
         super()._handle_coordinator_update()
 

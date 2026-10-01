@@ -38,6 +38,8 @@ from .const import (
     CONF_POWER_FAN_DELAY,
     CONF_POWER_SETTLE,
     DEFAULT_POWER_SETTLE,
+    CONF_FAN_SETTLE,
+    DEFAULT_FAN_SETTLE,
     DEFAULT_POWER_FAN_DELAY,
     FAN_VERIFY_DELAY,
     FAN_VERIFY_READS,
@@ -108,6 +110,7 @@ class CommandRecord:
     error: str | None = None
     fan_matches: int = 0  # consecutive reads (>= FAN_VERIFY_DELAY apart) showing the expected fan
     last_fan_press: float | None = None  # monotonic
+    last_fan_match: float | None = None  # monotonic time of the last counted matching fan read
 
     def as_attributes(self) -> dict[str, Any]:
         return {
@@ -401,7 +404,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
             started_at=dt_util.utcnow(),
             sent_monotonic=started_monotonic if started_monotonic is not None else now,
             confirm_timeout=len(pulses) * max(0.0, spacing) + CONFIRM_TIMEOUT + extra_wait
-            + (FAN_VERIFY_DELAY if KIND_FAN in expected else 0.0),
+            + (self.fan_verify_window if KIND_FAN in expected else 0.0),
             kind="multi" if retryable else None,
             value=None,
             spacing=spacing,
@@ -570,6 +573,15 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         return float(self.config_entry.options.get(CONF_POWER_SETTLE, DEFAULT_POWER_SETTLE))
 
     @property
+    def fan_settle(self) -> float:
+        return float(self.config_entry.options.get(CONF_FAN_SETTLE, DEFAULT_FAN_SETTLE))
+
+    @property
+    def fan_verify_window(self) -> float:
+        """Extra confirm time for a fan change: settle before the 1st read + gap to the 2nd."""
+        return self.fan_settle + FAN_VERIFY_DELAY * max(1, FAN_VERIFY_READS - 1)
+
+    @property
     def power_fan_delay(self) -> float:
         return float(self.config_entry.options.get(CONF_POWER_FAN_DELAY, DEFAULT_POWER_FAN_DELAY))
 
@@ -618,8 +630,9 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                         return
                     # matches now but not verified twice yet: verify again instead of re-pressing
                     rec.fan_matches = 1
+                    rec.last_fan_match = time.monotonic()
                     rec.sent_monotonic = time.monotonic()
-                    rec.confirm_timeout = CONFIRM_TIMEOUT
+                    rec.confirm_timeout = CONFIRM_TIMEOUT + FAN_VERIFY_DELAY
                     self._schedule_verify_refresh(rec, FAN_VERIFY_DELAY)
                     self._schedule_confirm_check(rec)
                     return
@@ -636,13 +649,14 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                     if rec.zone_key in self._last_fan_press:
                         rec.last_fan_press = self._last_fan_press[rec.zone_key]
                         rec.fan_matches = 0
+                        rec.last_fan_match = None
                 if not new:
                     # nothing to send, yet state differs (e.g. unknown setpoint): treat as final
                     self._fail(rec, None)
                     return
                 rec.sent_monotonic = started
                 rec.confirm_timeout = (len(new) * max(0.0, rec.spacing) + CONFIRM_TIMEOUT + waited
-                                       + (FAN_VERIFY_DELAY if KIND_FAN in rec.expected else 0.0))
+                                       + (self.fan_verify_window if KIND_FAN in rec.expected else 0.0))
                 _LOGGER.debug("Retry %s for %s: sent %s", rec.retries, rec.room, [p["label"] for p in new])
                 self._schedule_confirm_check(rec)
         except MsheirebError as err:
@@ -697,12 +711,19 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                 if KIND_FAN not in rec.expected:
                     self._confirm(rec)
                     continue
-                # fan: the reading must be taken >= FAN_VERIFY_DELAY after the press and repeat on a
-                # second read (a controller can echo a press the AC then drops, e.g. while starting)
-                if rec.last_fan_press is not None and now - rec.last_fan_press < FAN_VERIFY_DELAY - 0.5:
-                    self._schedule_verify_refresh(rec, FAN_VERIFY_DELAY - (now - rec.last_fan_press))
+                # fan: the first counted read is taken >= the fan settle time after the press, the
+                # next one >= FAN_VERIFY_DELAY after that (a controller can echo a press the AC then
+                # drops, e.g. while starting); earlier reads are ignored, not counted
+                settle = self.fan_settle
+                if rec.last_fan_press is not None and now - rec.last_fan_press < settle - 0.5:
+                    self._schedule_verify_refresh(rec, settle - (now - rec.last_fan_press))
+                    continue
+                if rec.fan_matches and rec.last_fan_match is not None \
+                        and now - rec.last_fan_match < FAN_VERIFY_DELAY - 0.5:
+                    self._schedule_verify_refresh(rec, FAN_VERIFY_DELAY - (now - rec.last_fan_match))
                     continue
                 rec.fan_matches += 1
+                rec.last_fan_match = now
                 if rec.fan_matches >= FAN_VERIFY_READS:
                     self._confirm(rec)
                 else:
@@ -710,6 +731,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                 continue
             if zone is not None and KIND_FAN in rec.expected:
                 rec.fan_matches = 0
+                rec.last_fan_match = None
             if now - rec.sent_monotonic >= rec.confirm_timeout:
                 if rec.kind and rec.retries < self.max_retries:
                     rec.retrying = True

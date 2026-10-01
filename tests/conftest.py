@@ -30,7 +30,7 @@ def instant_sequencing(request):
     import custom_components.msheireb.coordinator as co
 
     with patch.object(co, "POWER_POLL_INTERVAL", 0), patch.object(co, "POWER_CONFIRM_MAX", 0.05), \
-         patch.object(co, "DEFAULT_POWER_FAN_DELAY", 0), patch.object(co, "DEFAULT_POWER_SETTLE", 0), patch.object(co, "FAN_VERIFY_DELAY", 0), \
+         patch.object(co, "DEFAULT_POWER_FAN_DELAY", 0), patch.object(co, "DEFAULT_POWER_SETTLE", 0), patch.object(co, "DEFAULT_FAN_SETTLE", 0), patch.object(co, "FAN_VERIFY_DELAY", 0), \
          patch.object(co, "FAN_VERIFY_READS", 1):
         yield
 
