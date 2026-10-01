@@ -36,6 +36,11 @@ OPTIMISTIC_TIMEOUT = 25.0  # seconds before an unconfirmed optimistic value is d
 TOKEN_REFRESH_MARGIN = 600  # refresh access token this many seconds before expiry
 DEFAULT_TOKEN_LIFETIME = 86400
 
+import json as _json
+from pathlib import Path as _Path
+
+INTEGRATION_VERSION: str = _json.loads((_Path(__file__).parent / "manifest.json").read_text())["version"]
+
 PULSE_VALUE = "PULSE"
 
 # Logical roles, discovered from control/status labels returned by the API.

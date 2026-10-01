@@ -8,7 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_ACCESS_TOKEN, CONF_EXPIRES_AT, CONF_REFRESH_TOKEN, CONF_USER_ID
+from .const import CONF_ACCESS_TOKEN, CONF_EXPIRES_AT, CONF_REFRESH_TOKEN, CONF_USER_ID, INTEGRATION_VERSION
 from .coordinator import MsheirebCoordinator
 
 TO_REDACT = {
@@ -93,6 +93,8 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     data.pop(CONF_EXPIRES_AT, None)
     data["contracts"] = [async_redact_data(c, TO_REDACT) for c in data.get("contracts") or []]
     return {
+        "integration_version": INTEGRATION_VERSION,
+        "zone_count": sum(len(cd.zones) for cd in (coordinator.data or {}).values()),
         "entry": {
             "data": async_redact_data(data, TO_REDACT),
             "options": dict(entry.options),

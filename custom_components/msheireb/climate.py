@@ -34,7 +34,7 @@ from .const import (
     TEMP_STEP,
 )
 from .coordinator import KIND_FAN, KIND_POWER, KIND_TARGET, MsheirebCoordinator
-from .entity import MsheirebEntity
+from .entity import MsheirebEntity, room_device, room_entity_id, zone_needs_disambiguation
 from .models import HvacZone
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,14 +50,16 @@ async def async_setup_entry(
     def _add_new() -> None:
         new = []
         for cid, cd in (coordinator.data or {}).items():
-            names = [z.room_name for z in cd.zones.values()]
             for zone in sorted(cd.zones.values(), key=lambda z: z.sort_key):
                 if zone.key in known:
                     continue
                 known.add(zone.key)
-                dup = names.count(zone.room_name) > 1
-                new.append(MsheirebClimate(coordinator, entry, cid, zone, dup))
+                dup = zone_needs_disambiguation(cd, zone)
+                ent = MsheirebClimate(coordinator, entry, cid, zone, dup)
+                ent.entity_id = room_entity_id("climate", cd, zone)
+                new.append(ent)
         if new:
+            _LOGGER.debug("Adding %d climate entit(ies): %s", len(new), [e.unique_id for e in new])
             async_add_entities(new)
 
     _add_new()
@@ -86,7 +88,8 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
         super().__init__(coordinator, contract_id)
         self._zone_key = zone.key
         self._attr_unique_id = f"{contract_id}_{zone.device_id}_climate"
-        self._attr_name = f"{zone.room_name} {zone.device_name}" if disambiguate else zone.room_name
+        self._attr_name = None  # main feature of the room device -> entity name = room name
+        self._attr_device_info = room_device(zone, disambiguate)
         self._attr_min_temp = float(entry.options.get(CONF_MIN_TEMP, DEFAULT_MIN_TEMP))
         self._attr_max_temp = float(entry.options.get(CONF_MAX_TEMP, DEFAULT_MAX_TEMP))
         self._pulse_interval = float(entry.options.get(CONF_PULSE_INTERVAL, DEFAULT_PULSE_INTERVAL))

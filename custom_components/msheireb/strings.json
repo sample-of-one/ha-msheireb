@@ -100,7 +100,7 @@
         "name": "Commands failed"
       },
       "last_command": {
-        "name": "{room} last command",
+        "name": "Last command",
         "state": {
           "pending": "Pending",
           "confirmed": "Confirmed",
@@ -117,7 +117,7 @@
     },
     "switch": {
       "auto_restore": {
-        "name": "{room} auto-restore"
+        "name": "Auto-restore"
       }
     }
   },

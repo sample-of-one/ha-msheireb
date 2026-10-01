@@ -4,6 +4,10 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant, callback
+import logging
+
+from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
@@ -15,11 +19,14 @@ from .const import (
     CONF_EXPIRES_AT,
     CONF_REFRESH_TOKEN,
     DOMAIN,
+    INTEGRATION_VERSION,
     STORE_VERSION,
     slim_contracts,
 )
 from .drift import store_key
 from .coordinator import MsheirebCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH]
 
@@ -53,8 +60,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: MsheirebConfigEntry) -> 
     )
     coordinator = MsheirebCoordinator(hass, entry, api)
     await coordinator.drift.async_load()  # desired state survives restarts
+    # Blocking first refresh BEFORE the platforms are forwarded; this also fetches the
+    # contract list with one login when the entry has none stored (entries from <= 0.3.0).
     await coordinator.async_config_entry_first_refresh()
+    data = coordinator.data or {}
+    zones = sum(len(cd.zones) for cd in data.values())
+    _LOGGER.info(
+        "Msheireb Smart Home %s: %d contract(s), %d room HVAC zone(s)%s",
+        INTEGRATION_VERSION,
+        len(data),
+        zones,
+        "".join(f"; {cd.title}: {', '.join(z.room_name for z in cd.zones.values()) or 'no HVAC rooms'}"
+                for cd in data.values()),
+    )
+    if not data:
+        # Visible in the UI ("Retrying setup") instead of a silent, empty integration.
+        raise ConfigEntryNotReady("The Msheireb portal returned no contracts for this account yet")
     entry.runtime_data = coordinator
+
+    # Register the account + apartment devices up front (room devices reference them via_device).
+    dev_reg = dr.async_get(hass)
+    from .entity import apartment_device
+    from .sensor import account_device
+
+    dev_reg.async_get_or_create(config_entry_id=entry.entry_id, **account_device(coordinator))
+    for cid, cd in data.items():
+        dev_reg.async_get_or_create(config_entry_id=entry.entry_id, **apartment_device(cid, cd.title))
     entry.async_on_unload(coordinator.async_cancel_pending)
 
     options_snapshot = dict(entry.options)

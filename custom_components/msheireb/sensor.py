@@ -18,8 +18,9 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api import AUTH_FAILED, AUTH_OK, AUTH_REFRESHING, AUTH_RELOGIN
-from .const import CMD_RESULTS, DOMAIN
+from .const import CMD_RESULTS, DOMAIN, INTEGRATION_VERSION
 from .coordinator import MsheirebCoordinator
+from .entity import room_device, room_entity_id, zone_needs_disambiguation
 
 
 def account_device(coordinator: MsheirebCoordinator) -> DeviceInfo:
@@ -28,6 +29,7 @@ def account_device(coordinator: MsheirebCoordinator) -> DeviceInfo:
         name="Msheireb portal",
         manufacturer="Msheireb Properties",
         model="Resident portal API",
+        sw_version=INTEGRATION_VERSION,
     )
 
 
@@ -136,17 +138,11 @@ class LastCommandSensor(HealthEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = CMD_RESULTS
 
-    def __init__(self, coordinator: MsheirebCoordinator, contract_id: int, zone_key: str, room: str, title: str) -> None:
-        super().__init__(coordinator, f"last_command_{zone_key}")
+    def __init__(self, coordinator: MsheirebCoordinator, zone, disambiguate: bool = False) -> None:
+        super().__init__(coordinator, f"last_command_{zone.key}")
         self._attr_translation_key = "last_command"
-        self._attr_translation_placeholders = {"room": room}
-        self._zone_key = zone_key
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, f"contract_{contract_id}")},
-            name=f"Msheireb {title}",
-            manufacturer="Msheireb Properties",
-            model="Smart apartment",
-        )
+        self._zone_key = zone.key
+        self._attr_device_info = room_device(zone, disambiguate)
 
     @property
     def native_value(self) -> str | None:
@@ -173,7 +169,9 @@ async def async_setup_entry(
             for zone in sorted(cd.zones.values(), key=lambda z: z.sort_key):
                 if zone.key not in known:
                     known.add(zone.key)
-                    new.append(LastCommandSensor(coordinator, cid, zone.key, zone.room_name, cd.title))
+                    ent = LastCommandSensor(coordinator, zone, zone_needs_disambiguation(cd, zone))
+                    ent.entity_id = room_entity_id("sensor", cd, zone, "last command")
+                    new.append(ent)
         if new:
             async_add_entities(new)
 

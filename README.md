@@ -51,10 +51,16 @@ A command counts as *confirmed* when a later poll shows the requested state (set
 
 ## Troubleshooting
 
-- **No room/climate entities (v0.3.0 and earlier):** fixed in v0.3.1. The portal's token-refresh
-  response carries no contract list, so after setup/restart the integration found zero contracts and
-  silently created no rooms. Contracts are now stored from login and re-fetched with one login if missing.
-  Update via HACS and restart; no reconfiguration needed.
+- **Devices:** *Msheireb portal* (health/diagnostics), *Msheireb <unit>* (the apartment: controller and
+  lock status) and, since v0.3.2, **one device per room** (Dining Room, Master Bedroom, ...) holding the
+  room's thermostat (climate), its *Auto-restore* switch and *Last command* sensor.
+- **Which version is running?** Open any Msheireb device: *Firmware* shows the integration version
+  (v0.3.2+). The log also prints `Msheireb Smart Home <version>: N contract(s), M room HVAC zone(s)` at
+  startup. After a HACS update you must **restart Home Assistant** (not just reload the integration).
+- **No room/climate entities (v0.3.0):** the portal's token-refresh response carries no contract list,
+  so after setup/restart v0.3.0 found zero contracts and silently created no rooms. Fixed in v0.3.1;
+  contracts are stored from login and re-fetched with one login if missing. If the portal returns no
+  contracts at all, the integration now shows *Retrying setup* with the reason instead of loading empty.
 - **Debug logging** (per-poll contract/room/HVAC-zone counts, unrecognised labels):
 
 ```yaml
