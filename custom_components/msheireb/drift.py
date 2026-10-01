@@ -91,6 +91,7 @@ class DriftManager:
     events: int = 0
     last_event: DriftEvent | None = None
     restoring: set[str] = field(default_factory=set)
+    prev_fan: dict[str, str] = field(default_factory=dict)  # zone_key -> fan speed before HA turned it off
 
     def __post_init__(self) -> None:
         self.store = Store(self.hass, STORE_VERSION, store_key(self.coordinator.config_entry.entry_id))
@@ -100,9 +101,10 @@ class DriftManager:
         data = await self.store.async_load() or {}
         self.desired = {k: dict(v) for k, v in (data.get("desired") or {}).items()}
         self.auto_restore = {k: bool(v) for k, v in (data.get("auto_restore") or {}).items()}
+        self.prev_fan = {k: str(v) for k, v in (data.get("prev_fan") or {}).items() if v}
 
     def _data_to_save(self) -> dict[str, Any]:
-        return {"desired": self.desired, "auto_restore": self.auto_restore}
+        return {"desired": self.desired, "auto_restore": self.auto_restore, "prev_fan": self.prev_fan}
 
     @callback
     def _save(self) -> None:
@@ -132,6 +134,27 @@ class DriftManager:
         self.episodes.pop(zone_key, None)  # a new intent ends any drift episode
         self.coordinator.alerts.clear(f"drift_{zone_key}")
         self._save()
+
+    @callback
+    def remember_fan(self, zone_key: str, fan: str | None) -> None:
+        """Remember the fan speed to re-apply when HA turns the room back on."""
+        if fan:
+            self.prev_fan[zone_key] = fan
+        else:
+            self.prev_fan.pop(zone_key, None)
+        self._save()
+
+    @callback
+    def pop_remembered_fan(self, zone_key: str) -> str | None:
+        fan = self.prev_fan.pop(zone_key, None)
+        if fan is not None:
+            self._save()
+        return fan
+
+    @callback
+    def forget_desired(self, zone_key: str, kind: str) -> None:
+        if self.desired.get(zone_key, {}).pop(kind, None) is not None:
+            self._save()
 
     def is_auto_restore(self, zone_key: str) -> bool:
         return self.auto_restore.get(zone_key, True)
@@ -174,6 +197,8 @@ class DriftManager:
                     continue
                 have = actual_values(zone)
                 diff = {k: (want[k], have.get(k)) for k in KEYS_ORDER if k in want and _differs(k, want[k], have.get(k))}
+                if want.get("power") is False and have.get("power") is False:
+                    diff.pop("fan", None)  # fan speed is irrelevant while the room is off
                 ep = self.episodes.get(key)
                 if not diff:
                     if ep is not None:

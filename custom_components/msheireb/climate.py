@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_MAX_TEMP,
     DEFAULT_MIN_TEMP,
     FAN_ROLES,
+    ROLE_FAN_AUTO,
     OPTIMISTIC_TIMEOUT,
     CONF_PULSE_INTERVAL,
     DEFAULT_PULSE_INTERVAL,
@@ -189,29 +190,58 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             raise HomeAssistantError(f"{self.name}: controller not available")
         return zone
 
-    async def _command(self, zone: HvacZone, kind: str, value: Any, description: str) -> None:
+    async def _command(self, zone: HvacZone, expected: dict[str, Any], description: str) -> None:
         """Execute via the coordinator (which tracks, confirms, retries and records desired state)."""
         try:
-            await self.coordinator.async_command(zone, {kind: value}, description, self._pulse_interval)
+            await self.coordinator.async_command(zone, expected, description, self._pulse_interval)
         except MsheirebError as err:
             raise HomeAssistantError(f"{self.name}: command failed: {err}") from err
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """OFF: remember the fan speed, power off, fan to Auto. COOL: power on, re-apply the speed.
+
+        Sequenced as one command (power first, then fan) under the apartment command lock;
+        each part is only pulsed when the reported state differs, then confirmed/retried.
+        """
         if hvac_mode not in (HVACMode.OFF, HVACMode.COOL):
             raise HomeAssistantError(f"Unsupported HVAC mode {hvac_mode}")
         want_on = hvac_mode == HVACMode.COOL
+        drift = self.coordinator.drift
         async with self._lock, self.coordinator.command_lock(self._contract_id):
             zone = self._require_zone()
             if ROLE_POWER not in zone.controls:
                 raise HomeAssistantError(f"{self.name}: no power control")
-            if zone.power is want_on:
-                self.coordinator.async_set_desired(zone.key, {KIND_POWER: want_on})
-                self._optimistic.pop("power", None)
+            current_fan = zone.fan_mode(self._fan_roles)
+            expected: dict[str, Any] = {KIND_POWER: want_on}
+            if not want_on:
+                # don't overwrite an existing memory while already off (the fan may be our Auto)
+                if zone.power is not False or zone.key not in drift.prev_fan:
+                    remembered = current_fan or drift.desired.get(zone.key, {}).get(KIND_FAN)
+                    if remembered:
+                        drift.remember_fan(zone.key, remembered)
+                if ROLE_FAN_AUTO in self._fan_roles:
+                    expected[KIND_FAN] = ROLE_FAN_AUTO
+            else:
+                fan = drift.prev_fan.get(zone.key) or drift.desired.get(zone.key, {}).get(KIND_FAN)
+                if fan in self._fan_roles:
+                    expected[KIND_FAN] = fan
+                else:
+                    drift.forget_desired(zone.key, KIND_FAN)  # unknown: leave the fan as it is
+            if self.coordinator._zone_matches(zone, expected):
+                self.coordinator.async_set_desired(zone.key, expected)
+                if want_on:
+                    drift.pop_remembered_fan(zone.key)
+                for name in ("power", "fan"):
+                    self._optimistic.pop(name, None)
                 self.async_write_ha_state()
                 return
-            # Power is a toggle pulse; only sent when the reported state differs.
-            await self._command(zone, KIND_POWER, want_on, f"set_hvac_mode {hvac_mode}")
+            parts = ", ".join(f"{k}={v}" for k, v in expected.items())
+            await self._command(zone, expected, f"set_hvac_mode {hvac_mode} ({parts})")
+            if want_on:
+                drift.pop_remembered_fan(zone.key)
             self._set_opt("power", want_on)
+            if KIND_FAN in expected:
+                self._set_opt("fan", expected[KIND_FAN])
         self.coordinator.schedule_refresh_after_command()
 
     async def async_turn_on(self) -> None:
@@ -226,11 +256,16 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
         async with self._lock, self.coordinator.command_lock(self._contract_id):
             zone = self._require_zone()
             if zone.fan_mode(self._fan_roles) == fan_mode:
+                if zone.power is False:
+                    self.coordinator.drift.remember_fan(zone.key, fan_mode)
                 self.coordinator.async_set_desired(zone.key, {KIND_FAN: fan_mode})
                 self._optimistic.pop("fan", None)
                 self.async_write_ha_state()
                 return
-            await self._command(zone, KIND_FAN, fan_mode, f"set_fan_mode {fan_mode}")
+            if zone.power is False:
+                # while off, the chosen speed is what to re-apply on the next turn-on
+                self.coordinator.drift.remember_fan(zone.key, fan_mode)
+            await self._command(zone, {KIND_FAN: fan_mode}, f"set_fan_mode {fan_mode}")
             self._set_opt("fan", fan_mode)
         self.coordinator.schedule_refresh_after_command()
 
@@ -255,5 +290,5 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             if role not in zone.controls:
                 raise HomeAssistantError(f"{self.name}: no {role} control")
             self._set_opt("target", target)
-            await self._command(zone, KIND_TARGET, target, f"set_temperature {current:.1f} -> {target:.1f}")
+            await self._command(zone, {KIND_TARGET: target}, f"set_temperature {current:.1f} -> {target:.1f}")
         self.coordinator.schedule_refresh_after_command()

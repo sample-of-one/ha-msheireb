@@ -468,6 +468,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         for kind in (KIND_POWER, KIND_TARGET, KIND_FAN):
             if kind in expected:
                 if sent and kind != KIND_POWER:
+                    await asyncio.sleep(max(0.0, spacing))  # keep presses spaced (AC misses fast presses)
                     zone = await self.async_read_zone(zone) or zone
                 await self._execute(zone, kind, expected[kind], spacing, sent)
 

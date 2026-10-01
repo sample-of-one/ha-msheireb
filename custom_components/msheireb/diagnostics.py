@@ -82,6 +82,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "adopt_external": coordinator.drift.adopt,
             "desired": coordinator.drift.desired,
             "auto_restore": coordinator.drift.auto_restore,
+            "remembered_fan": coordinator.drift.prev_fan,
             "episodes": {k: {"polls": e.polls, "diff": {kk: list(v) for kk, v in e.diff.items()},
                              "handled": e.handled, "restored": e.restored}
                          for k, e in coordinator.drift.episodes.items()},

@@ -291,7 +291,7 @@ async def test_power_retry_never_blindly_toggles(hass):
     entry, coord, api = await _setup(hass)
     FakeApi.drop_pulses = 1
     await hass.services.async_call("climate", "turn_off", {"entity_id": DINING}, blocking=True)
-    assert [c["sn"] for c in api.commands] == [1]
+    assert [c["sn"] for c in api.commands] == [1, 2]  # power (dropped by the AC), then fan auto
     # meanwhile the AC was switched off at the wall panel
     for d in api.state["rooms"][0]["devices"][0]["status"]["digital"]:
         if d["label"] == "HVAC AC":

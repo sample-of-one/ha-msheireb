@@ -22,6 +22,14 @@ Unofficial custom integration for the in-apartment AC (fan coil units) at **Mshe
 
 > Not affiliated with Msheireb Properties. It uses an undocumented API that may change without notice.
 
+## Turning a room off and on
+
+- **Off from Home Assistant:** the integration first remembers the room's current fan speed (stored per room in HA storage, so it survives restarts), then presses *AC power* and, if the fan is not already on Auto, *Fan Auto*, in that order, spaced by the pulse spacing.
+- **On (cool) from Home Assistant:** it presses *AC power*, then re-applies the remembered fan speed if it differs. Without a remembered speed it uses the last fan speed set from HA, and otherwise leaves the fan as it is.
+- Changing the fan from HA while the room is off updates the remembered speed for the next turn-on.
+- The desired state used for external-change detection follows this: *off + fan Auto* while off, the restored speed after turning on. While a room is off, fan differences are ignored (no external-change alerts); turning it on at the wall panel is still detected.
+- Each part is only pressed when the reported state differs, and the command is confirmed/retried like any other.
+
 ## How it controls the AC
 The portal's controller accepts **pulse** commands. Each *Temp Up/Down* pulse moves the setpoint by 0.5 °C (verified). To set a temperature, the integration sends the needed number of Up/Down pulses one at a time, 5.0 s apart start-to-start by default (configurable 0.5–10 s; the real AC also registered 3 presses 1.2–1.5 s apart, so you can lower it for faster changes), and re-reads the setpoint every 3 pulses. It never sends more pulses than initially needed. Power and fan pulses are only sent when the reported state differs from the requested one. Control serial numbers are discovered from the control labels, not hard-coded. The UI updates optimistically and is reconciled by an extra refresh about 5 s after a command, independent of the polling interval.
 

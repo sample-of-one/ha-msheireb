@@ -113,7 +113,7 @@ async def test_power_and_fan_only_when_different(hass):
     await hass.services.async_call("climate", "turn_off", {"entity_id": eid}, blocking=True)
     assert hass.states.get(eid).state == HVACMode.OFF  # optimistic
     await hass.services.async_call("climate", "set_fan_mode", {"entity_id": eid, "fan_mode": "medium"}, blocking=True)
-    assert [c["sn"] for c in api.commands] == [1, 4]
+    assert [c["sn"] for c in api.commands] == [1, 2, 4]  # power off, fan auto (off rule), then medium
     await hass.async_block_till_done()
     await hass.config_entries.async_entries(DOMAIN)[0].runtime_data.async_refresh()
     await hass.async_block_till_done()
