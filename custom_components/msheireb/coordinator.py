@@ -36,6 +36,8 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONFIRM_TIMEOUT,
     CONF_POWER_FAN_DELAY,
+    CONF_POWER_SETTLE,
+    DEFAULT_POWER_SETTLE,
     DEFAULT_POWER_FAN_DELAY,
     FAN_VERIFY_DELAY,
     FAN_VERIFY_READS,
@@ -162,6 +164,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         self._cancel_refresh: CALLBACK_TYPE | None = None
         self._cancel_confirm: dict[str, CALLBACK_TYPE] = {}
         self._last_fan_press: dict[str, float] = {}
+        self.last_unlock: dict[int, dict[str, Any]] = {}  # contract_id -> {result, at, message}
         from .drift import DriftManager
 
         self.drift = DriftManager(hass, self)
@@ -514,7 +517,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         if KIND_POWER in expected:
             before = len(sent)
             await self._execute(zone, KIND_POWER, expected[KIND_POWER], spacing, sent)
-            if len(sent) > before and any(k in expected for k in (KIND_TARGET, KIND_FAN)):
+            if len(sent) > before:
                 t0 = time.monotonic()
                 fresh = await self._wait_for_power(zone, expected[KIND_POWER])
                 if fresh is not None and fan_if_differs and KIND_FAN in expected and KIND_TARGET not in expected \
@@ -524,8 +527,10 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                                   fresh.fan_mode(FAN_ROLES))
                     return time.monotonic() - t0
                 if fresh is None:
-                    _LOGGER.debug("%s: power did not change within %.0f s; not pressing the fan yet",
-                                  zone.room_name, POWER_CONFIRM_MAX)
+                    _LOGGER.debug("%s: power did not change within %.0f s; nothing else pressed",
+                                  zone.room_name, self.power_settle + POWER_CONFIRM_MAX)
+                    return time.monotonic() - t0
+                if not any(k in expected for k in (KIND_TARGET, KIND_FAN)):
                     return time.monotonic() - t0
                 delay = self.power_fan_delay
                 _LOGGER.debug("%s: power confirmed %s; waiting %.1f s before the next press",
@@ -547,13 +552,22 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         return waited
 
     async def _wait_for_power(self, zone: HvacZone, want: bool) -> HvacZone | None:
+        """Wait the power settle time, then read every POWER_POLL_INTERVAL s until the power matches."""
+        settle = self.power_settle
+        _LOGGER.debug("%s: power pressed; settling %.0f s before checking", zone.room_name, settle)
+        await asyncio.sleep(settle)
         deadline = time.monotonic() + POWER_CONFIRM_MAX
-        while time.monotonic() < deadline:
-            await asyncio.sleep(POWER_POLL_INTERVAL)
+        while True:
             fresh = await self.async_read_zone(zone)
             if fresh is not None and fresh.power is want:
                 return fresh
-        return None
+            if time.monotonic() >= deadline:
+                return None
+            await asyncio.sleep(POWER_POLL_INTERVAL)
+
+    @property
+    def power_settle(self) -> float:
+        return float(self.config_entry.options.get(CONF_POWER_SETTLE, DEFAULT_POWER_SETTLE))
 
     @property
     def power_fan_delay(self) -> float:

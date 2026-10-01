@@ -234,6 +234,32 @@ class MsheirebApi:
     async def async_get_lock_status(self, contract_id: int | str) -> dict[str, Any]:
         return await self._request("GET", f"/smart-lock/contract-status/{contract_id}") or {}
 
+    async def async_unlock_door(self, contract_id: int | str, duration: str = "5s") -> Any:
+        """Temporary door unlock, exactly like the web portal's 'Unlock (5s)' button.
+
+        POST /smart-lock/contract-access-point {contract_id, state: "unlock", duration}.
+        No PIN/OTP is involved in the portal flow. Errors carry the portal's message.
+        """
+        body = {"contract_id": int(contract_id), "state": "unlock", "duration": duration}
+        status, data = await self._raw_authed("POST", "/smart-lock/contract-access-point", body)
+        if status >= 400 or not isinstance(data, dict) or data.get("status") not in (None, "success"):
+            raise MsheirebError(_message(data) or f"unlock rejected (HTTP {status})")
+        return data.get("data") if isinstance(data, dict) else None
+
+    async def _raw_authed(self, method: str, path: str, body: Any = None) -> tuple[int, Any]:
+        """Authenticated call returning (status, json) without generic error mapping."""
+        await self.async_ensure_session()
+        token_used = self.access_token
+        status, data = await self._raw(method, path, body)
+        if status == 401:
+            if self.access_token == token_used:
+                await self._renew(force=True)
+            status, data = await self._raw(method, path, body)
+            if status == 401:
+                self._set_auth_status(AUTH_FAILED)
+                raise MsheirebAuthError("unauthorized after token renewal")
+        return status, data
+
     async def async_send_command(
         self, ip: str, sn: int, type_io: str, type_code: str, value: str
     ) -> dict[str, Any]:

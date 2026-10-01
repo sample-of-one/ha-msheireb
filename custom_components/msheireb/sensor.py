@@ -16,6 +16,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import slugify
 
 from .api import AUTH_FAILED, AUTH_OK, AUTH_REFRESHING, AUTH_RELOGIN
 from .const import CMD_RESULTS, DOMAIN, INTEGRATION_VERSION
@@ -155,6 +156,31 @@ class LastCommandSensor(HealthEntity, SensorEntity):
         return rec.as_attributes() if rec else None
 
 
+class LastUnlockSensor(HealthEntity, SensorEntity):
+    """Result of the last door unlock sent from Home Assistant."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["success", "failed"]
+
+    def __init__(self, coordinator: MsheirebCoordinator, contract_id: int, title: str) -> None:
+        from .entity import apartment_device
+
+        super().__init__(coordinator, f"last_unlock_{contract_id}")
+        self._attr_translation_key = "last_unlock"
+        self._contract_id = contract_id
+        self._attr_device_info = apartment_device(contract_id, title)
+
+    @property
+    def native_value(self) -> str | None:
+        rec = self.coordinator.last_unlock.get(self._contract_id)
+        return rec["result"] if rec else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        rec = self.coordinator.last_unlock.get(self._contract_id)
+        return {k: v for k, v in rec.items() if k != "result"} if rec else None
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -166,6 +192,11 @@ async def async_setup_entry(
     def _add_new() -> None:
         new = []
         for cid, cd in (coordinator.data or {}).items():
+            if (cd.lock or {}).get("locks") and f"unlock_{cid}" not in known:
+                known.add(f"unlock_{cid}")
+                ent = LastUnlockSensor(coordinator, cid, cd.title)
+                ent.entity_id = "sensor." + slugify(f"msheireb {cd.title} last unlock")
+                new.append(ent)
             for zone in sorted(cd.zones.values(), key=lambda z: z.sort_key):
                 if zone.key not in known:
                     known.add(zone.key)

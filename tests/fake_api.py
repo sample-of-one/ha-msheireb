@@ -45,7 +45,18 @@ class FakeApi:
     async def async_get_controller_status(self, ip):
         return {"ip": ip, "status": FakeApi.controller}
 
+    unlock_error = None  # MsheirebError to raise from the (mock) unlock
+    unlock_calls: list = []
+    lock_reads = 0
+
+    async def async_unlock_door(self, contract_id, duration="5s"):
+        FakeApi.unlock_calls.append((contract_id, duration))
+        if FakeApi.unlock_error:
+            raise FakeApi.unlock_error
+        return None
+
     async def async_get_lock_status(self, cid):
+        FakeApi.lock_reads += 1
         return {"contract_id": cid, "locks": [{"display_name": "L1", "low_battery": False,
                                                 "current_lock_status": {"connected": True}}]}
 

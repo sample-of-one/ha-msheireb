@@ -31,7 +31,7 @@ SN_ROLE = {1: "power", 2: "auto", 3: "low", 4: "medium", 5: "high"}
 class RealisticAc:
     """Dining Room AC behaviour (other rooms static)."""
 
-    def __init__(self, clock, power=False, fan="auto", power_latency=3.0, startup=4.0):
+    def __init__(self, clock, power=False, fan="auto", power_latency=7.0, startup=4.0):
         self.clock, self.power, self.fan = clock, power, fan
         self.power_latency, self.startup = power_latency, startup
         self.pending_power_at = None
@@ -41,6 +41,9 @@ class RealisticAc:
         self.extra_on = None  # inject a second ON fan reading (ambiguous controller state)
         self.resets_fan_on_start = True
         self.presses = []
+        self.press_times = []  # (role, t)
+        self.read_times = []
+        self.drop_power = 0  # lose the next N power presses
 
     def _settle(self):
         now = self.clock()
@@ -59,7 +62,11 @@ class RealisticAc:
         role = SN_ROLE[sn]
         self.presses.append(role)
         now = self.clock()
+        self.press_times.append((role, now))
         if role == "power":
+            if self.drop_power:
+                self.drop_power -= 1
+                return
             self.pending_power_at = now + self.power_latency
             return
         if self.ignore_fan:
@@ -71,6 +78,7 @@ class RealisticAc:
 
     def apply(self, payload):
         self._settle()
+        self.read_times.append(self.clock())
         dev = payload["rooms"][0]["devices"][0]["status"]
         shown = self.echo[0] if self.echo else self.fan
         for d in dev["digital"]:
@@ -160,7 +168,7 @@ async def test_turn_on_waits_for_power_then_delay_then_fan(hass, ac, freezer):
 
 async def test_v036_timing_echo_then_drop_is_not_confirmed_and_is_retried(hass, ac, freezer):
     """Fan pressed right after power (delay 0, long start-up): the reading echoes High, then Auto."""
-    ac.startup = 8.0
+    ac.startup = 8.0  # power applies at +7 s, starting until +15 s; settle 10 s + delay 0 -> press at +10 s
     entry, coord = await _setup(hass, {"power_fan_delay": 0})
     coord.drift.prev_fan[KEY] = "high"
     await _svc(hass, "turn_on")
@@ -300,3 +308,68 @@ async def test_option_on_default_unchanged(hass, ac, freezer):
     entry, coord = await _setup(hass)  # default: Fan to Auto when off = on
     await _svc(hass, "turn_off")
     assert ac.presses == ["power", "auto"]
+
+
+# ---------------------------------------------------------------- power settle time (real unit ~7 s)
+def _first_read_after(ac, t):
+    return min(r for r in ac.read_times if r > t) - t
+
+
+async def test_settle_before_first_power_check_and_fan(hass, ac, freezer):
+    entry, coord = await _setup(hass)  # defaults: settle 10 s, delay 5 s
+    coord.drift.prev_fan[KEY] = "high"
+    await _svc(hass, "turn_on")
+    (_, t_power), (_, t_fan) = ac.press_times
+    assert _first_read_after(ac, t_power) >= 10  # no power check during the settle time
+    assert t_fan - t_power >= 15  # settle 10 s + Power -> fan delay 5 s
+    await _advance(hass, freezer, 15)
+    assert coord.health.commands[KEY].result == "confirmed"
+
+
+async def test_settle_option_and_power_only_turn_off(hass, ac, freezer):
+    ac.power, ac.fan = True, "medium"
+    entry, coord = await _setup(hass, {"power_settle": 20, "fan_auto_when_off": False})
+    await _svc(hass, "turn_off")
+    (_, t_power), = ac.press_times
+    assert _first_read_after(ac, t_power) >= 20
+    assert not ac.power  # confirmed inside the command (after settle)
+    await _advance(hass, freezer, 15)
+    assert coord.health.commands[KEY].result == "confirmed"
+
+
+async def test_power_never_changes_gives_up_after_settle_plus_30s(hass, ac, freezer):
+    entry, coord = await _setup(hass, {"max_retries": 0})
+    ac.power_latency = 10_000
+    await _svc(hass, "turn_on")
+    t_power = ac.press_times[0][1]
+    reads = [r - t_power for r in ac.read_times if r > t_power]
+    assert reads[0] >= 10 and 38 <= reads[-1] <= 42  # settle 10 s, then polls every 2 s for 30 s
+    assert all(b - a >= 1.9 for a, b in zip(reads, reads[1:]))
+
+
+async def test_retry_power_press_also_settles(hass, ac, freezer):
+    entry, coord = await _setup(hass, {"max_retries": 1})
+    coord.drift.prev_fan[KEY] = "high"
+    ac.drop_power = 1  # first power press lost
+    await _svc(hass, "turn_on")
+    assert ac.presses == ["power"]  # power never changed -> fan not pressed
+    await _advance(hass, freezer, 120, step=2)
+    assert ac.presses == ["power", "power", "high"]  # retry: power, settle, delay, fan
+    t_retry = ac.press_times[1][1]
+    assert _first_read_after(ac, t_retry) >= 10
+    assert ac.press_times[2][1] - t_retry >= 15
+    assert coord.health.commands[KEY].result == "confirmed" and ac.fan == "high"
+
+
+async def test_drift_restore_settles_before_fan(hass, ac, freezer):
+    ac.power, ac.fan = True, "medium"
+    entry, coord = await _setup(hass)
+    await _svc(hass, "turn_off")  # desired: off + auto
+    await _advance(hass, freezer, 20)
+    ac.power, ac.fan = True, "low"  # turned on at the wall panel
+    n = len(ac.presses)
+    await _advance(hass, freezer, 700, step=10)  # 2 polls + grace -> restore
+    assert ac.presses[n:] == ["power", "auto"]
+    t_power, t_fan = ac.press_times[n][1], ac.press_times[n + 1][1]
+    assert _first_read_after(ac, t_power) >= 10 and t_fan - t_power >= 15
+    assert not ac.power and ac.fan == "auto"

@@ -29,14 +29,25 @@ The behaviour below is the default (**Fan to Auto when off** = on). With that op
 - **Off** presses only *AC power* (confirmed like any command); the fan speed is left untouched and the desired state keeps the actual speed (no Auto expectation).
 - **On** presses only *AC power*. After the power change is confirmed it compares the actual fan with the remembered/desired speed; only if they differ does it wait the *Power → fan delay* and press the speed, with the same two-read verification and retries.
 
-- **Off from Home Assistant:** the integration remembers the room's current fan speed (per room, in HA storage, survives restarts), presses *AC power*, waits until the controller reports the AC off (re-reading every 2 s, up to 30 s), waits the *Power → fan delay* (default 5 s) and then presses *Fan Auto* if needed.
-- **On (cool) from Home Assistant:** *AC power*, wait until the AC reports on, wait the *Power → fan delay*, then press the remembered speed if it differs. Without a remembered speed it uses the last fan speed set from HA, otherwise it leaves the fan alone. (A fan press sent while the AC is still starting can be shown briefly by the controller and then dropped by the AC.)
+- **Off from Home Assistant:** the integration remembers the room's current fan speed (per room, in HA storage, survives restarts), presses *AC power*, waits the *Power settle time* (default 10 s; the real unit takes ~7 s to switch), then waits until the controller reports the AC off (re-reading every 2 s, up to 30 s more), waits the *Power → fan delay* (default 5 s) and then presses *Fan Auto* if needed.
+- **On (cool) from Home Assistant:** *AC power*, wait the *Power settle time*, wait until the AC reports on, wait the *Power → fan delay*, then press the remembered speed if it differs. Without a remembered speed it uses the last fan speed set from HA, otherwise it leaves the fan alone. (A fan press sent while the AC is still starting can be shown briefly by the controller and then dropped by the AC.)
 - If the power never changes, the fan is not pressed; the command is retried/reported like any other.
+- The settle time is applied after **every** power press: turn-on, turn-off (also when only power is pressed), retries and external-change restores. Nothing is checked or pressed during it.
 - **Fan verification:** a fan change only counts as confirmed when the actual readings show it on **two reads at least 5 s apart**, the first at least 5 s after the press. Otherwise only the fan is pressed again (up to *Automatic retries*), then a notification is shown.
 - The fan mode shown in HA is the **actual** reported one. Exactly one fan reading must be ON; several ON at once (e.g. Auto + High) is treated as unknown, never as a match. The requested value is shown only while the command is running, then the actual reading wins.
 - The remembered speed is only replaced by a real speed taken while the room is on, or by a fan speed you choose in HA. It is never replaced by Auto from the off-sequence, a drift restore or an AC restart.
 - The desired state used for external-change detection is *off + fan Auto* while off and the restored speed after turning on. While a room is off, fan differences are ignored; turning it on at the wall panel is still detected.
 - Debug logging shows the raw fan readings and the derived fan mode for every read.
+
+## Door unlock button (opt-in)
+
+The apartment device can show an **Unlock door** button that does exactly what the portal's *Unlock (5s)* button does: `POST /smart-lock/contract-access-point` with `{"contract_id": …, "state": "unlock", "duration": "5s"}` (a temporary unlock of the apartment's smart lock; the portal asks for no PIN or OTP). After a successful request the lock status is refreshed, and the **Last unlock** sensor shows the result (`success`/`failed`), time and the portal's message.
+
+> **Security note:** anyone or anything that can press this button in Home Assistant can open your front door: users, dashboards, automations, voice assistants, the companion app. It is therefore **off twice by default**:
+> 1. the button entity is **disabled** (enable it under the apartment device → Entities), **and**
+> 2. the option **Enable door unlock button** must be turned on; otherwise a press is refused with an error.
+>
+> Only enable it if you need it, restrict who has HA access, avoid exposing it to voice assistants, and consider wrapping it in a confirmation (e.g. a script with a confirmation dialog). Each unlock is logged at INFO level (without IDs).
 
 ## How it controls the AC
 The portal's controller accepts **pulse** commands. Each *Temp Up/Down* pulse moves the setpoint by 0.5 °C (verified). To set a temperature, the integration sends the needed number of Up/Down pulses one at a time, 5.0 s apart start-to-start by default (configurable 0.5–10 s; the real AC also registered 3 presses 1.2–1.5 s apart, so you can lower it for faster changes), and re-reads the setpoint every 3 pulses. It never sends more pulses than initially needed. Power and fan pulses are only sent when the reported state differs from the requested one. Control serial numbers are discovered from the control labels, not hard-coded. The UI updates optimistically and is reconciled by an extra refresh about 5 s after a command, independent of the polling interval.
@@ -63,11 +74,13 @@ The portal's controller accepts **pulse** commands. Each *Temp Up/Down* pulse mo
 | Polling interval | 300 s (5 min) | 15–600 s | How often the portal is polled. Commands get their own refreshes (~5 s after sending and at the end of the confirmation window), independent of this. Existing installs keep their saved value. |
 | Pulse spacing | 5.0 s | 0.5–10 s, 0.5 steps | Time between consecutive Temp Up/Down presses; the AC misses presses sent too fast. |
 | Fan to Auto when off | on | on / off | Off: fan Auto + speed remembered; on: speed re-applied. When disabled, only power is pressed (see above). |
+| Power settle time | 10 s | 0–60 s | Fixed wait after every power press before the first power check or any next press (the real unit takes ~7 s). |
 | Power → fan delay | 5 s | 0–30 s | Wait after the power change is confirmed, before the fan press. |
 | Automatic retries | 2 | 0–5 (0 = off) | Re-sends a command the AC did not confirm (see below). |
 | On external change | restore + notify | restore + notify / restore / notify / ignore | What to do when the wall panel, the portal or a power outage changes a room. |
 | Grace period | 60 s | 0–3600 s | How long a change must persist, **and** at least 2 polls, before acting. With 5-min polling that is about 5–10 min after the change. |
 | Adopt external changes | off | | Treat external changes as the new desired state instead of restoring. |
+| Enable door unlock button | off | on / off | Must be on for the (disabled-by-default) *Unlock door* button to work. See the security note. |
 | Notifications | on | | Login failure, controller/portal offline, unconfirmed commands. |
 
 A command counts as *confirmed* when a later poll shows the requested state (setpoint, power or fan). The confirmation window scales with the number of presses: **presses × pulse spacing + 20 s**, counted from the first press. For example, a 2 °C change is 4 presses, which gives 4 × 5 s + 20 s = 40 s. If the state doesn't match within that window, the integration **retries automatically** (default 2 retries, configurable 0–5). It re-reads the actual state first. For temperature, it sends only the presses still needed from the actual setpoint. For power and fan, it re-sends the press only if the actual state still differs, so it never toggles blindly. Each retry gets its own window (retry presses × spacing + 20 s). Only after the final retry fails does the command become *not confirmed*, which increments "Commands failed" and sends a notification. Counters reset when Home Assistant restarts. Confirmation does not wait for the regular poll: besides the refresh ~5 s after the command, the integration refreshes again when each confirmation window ends.
