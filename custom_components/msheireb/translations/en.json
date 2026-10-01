@@ -39,7 +39,10 @@
           "scan_interval": "Polling interval (seconds)",
           "pulse_interval": "Pulse spacing in seconds between Temp Up/Down presses (0.5–10)",
           "notifications": "Show notifications (login failure, controller/portal offline, unconfirmed commands)",
-          "max_retries": "Automatic retries for unconfirmed commands (0 = off)"
+          "max_retries": "Automatic retries for unconfirmed commands (0 = off)",
+          "external_change": "On external change (wall panel, portal, power outage)",
+          "drift_grace": "Grace period before acting on an external change (seconds, needs 2+ polls)",
+          "adopt_external": "Adopt external changes as the new desired state"
         }
       }
     },
@@ -107,6 +110,14 @@
       },
       "command_retries": {
         "name": "Command retries"
+      },
+      "drift_events": {
+        "name": "External change events"
+      }
+    },
+    "switch": {
+      "auto_restore": {
+        "name": "{room} auto-restore"
       }
     }
   },
@@ -114,6 +125,16 @@
     "reauth_required": {
       "title": "Msheireb login needs attention",
       "description": "The saved Msheireb portal login for {title} stopped working and automatic re-login failed. Go to Settings → Devices & services → Msheireb Smart Home and choose Reconfigure/Re-authenticate to enter your password again."
+    }
+  },
+  "selector": {
+    "external_change": {
+      "options": {
+        "restore_notify": "Restore + notify",
+        "restore": "Restore",
+        "notify": "Notify only",
+        "ignore": "Ignore"
+      }
     }
   }
 }

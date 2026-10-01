@@ -11,9 +11,17 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectSelectorMode
 
 from .api import MsheirebApi, MsheirebAuthError, MsheirebError
 from .const import (
+    CONF_ADOPT_EXTERNAL,
+    CONF_DRIFT_GRACE,
+    CONF_EXTERNAL_CHANGE,
+    DEFAULT_ADOPT_EXTERNAL,
+    DEFAULT_DRIFT_GRACE,
+    DEFAULT_EXTERNAL_CHANGE,
+    EXT_MODES,
     CONF_ACCESS_TOKEN,
     CONF_EXPIRES_AT,
     CONF_MAX_RETRIES,
@@ -149,6 +157,19 @@ class MsheirebOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_MAX_RETRIES, default=opts.get(CONF_MAX_RETRIES, DEFAULT_MAX_RETRIES)
                 ): vol.All(vol.Coerce(int), vol.Range(min=0, max=MAX_RETRIES_LIMIT)),
+                vol.Required(
+                    CONF_EXTERNAL_CHANGE, default=opts.get(CONF_EXTERNAL_CHANGE, DEFAULT_EXTERNAL_CHANGE)
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=EXT_MODES, translation_key="external_change", mode=SelectSelectorMode.DROPDOWN
+                    )
+                ),
+                vol.Required(
+                    CONF_DRIFT_GRACE, default=opts.get(CONF_DRIFT_GRACE, DEFAULT_DRIFT_GRACE)
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
+                vol.Required(
+                    CONF_ADOPT_EXTERNAL, default=opts.get(CONF_ADOPT_EXTERNAL, DEFAULT_ADOPT_EXTERNAL)
+                ): bool,
                 vol.Required(
                     CONF_NOTIFICATIONS, default=opts.get(CONF_NOTIFICATIONS, DEFAULT_NOTIFICATIONS)
                 ): bool,

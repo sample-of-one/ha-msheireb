@@ -187,9 +187,9 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
         return zone
 
     async def _command(self, zone: HvacZone, kind: str, value: Any, description: str) -> None:
-        """Execute via the coordinator (which tracks, confirms and retries)."""
+        """Execute via the coordinator (which tracks, confirms, retries and records desired state)."""
         try:
-            await self.coordinator.async_command(zone, kind, value, description, self._pulse_interval)
+            await self.coordinator.async_command(zone, {kind: value}, description, self._pulse_interval)
         except MsheirebError as err:
             raise HomeAssistantError(f"{self.name}: command failed: {err}") from err
 
@@ -202,6 +202,7 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             if ROLE_POWER not in zone.controls:
                 raise HomeAssistantError(f"{self.name}: no power control")
             if zone.power is want_on:
+                self.coordinator.async_set_desired(zone.key, {KIND_POWER: want_on})
                 self._optimistic.pop("power", None)
                 self.async_write_ha_state()
                 return
@@ -222,6 +223,7 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
         async with self._lock, self.coordinator.command_lock(self._contract_id):
             zone = self._require_zone()
             if zone.fan_mode(self._fan_roles) == fan_mode:
+                self.coordinator.async_set_desired(zone.key, {KIND_FAN: fan_mode})
                 self._optimistic.pop("fan", None)
                 self.async_write_ha_state()
                 return
@@ -242,6 +244,7 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
                 raise HomeAssistantError(f"{self.name}: current setpoint unknown")
             needed = round((target - current) / TEMP_STEP)
             if needed == 0:
+                self.coordinator.async_set_desired(zone.key, {KIND_TARGET: target})
                 self._optimistic.pop("target", None)
                 self.async_write_ha_state()
                 return

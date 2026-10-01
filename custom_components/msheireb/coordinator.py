@@ -152,6 +152,9 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         self._command_locks: dict[int, asyncio.Lock] = {}
         self._cancel_refresh: CALLBACK_TYPE | None = None
         self._cancel_confirm: dict[str, CALLBACK_TYPE] = {}
+        from .drift import DriftManager
+
+        self.drift = DriftManager(hass, self)
 
     # ---------------------------------------------------------------- health listeners
     @callback
@@ -300,6 +303,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                 h.controller_down_since.pop(cid, None)
                 self.alerts.clear(key)
         self._evaluate_commands(data)
+        self.drift.evaluate(data)
 
     # ---------------------------------------------------------------- commands
     async def async_read_zone(self, zone: HvacZone) -> HvacZone | None:
@@ -336,6 +340,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         spacing: float = 0.0,
         kind: str | None = None,
         value: Any = None,
+        retryable: bool = True,
     ) -> CommandRecord:
         """Track a command. Timeout scales with the presses: pulses x spacing + CONFIRM_TIMEOUT,
         measured from the first press."""
@@ -349,8 +354,8 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
             started_at=dt_util.utcnow(),
             sent_monotonic=started_monotonic if started_monotonic is not None else now,
             confirm_timeout=len(pulses) * max(0.0, spacing) + CONFIRM_TIMEOUT,
-            kind=kind,
-            value=value,
+            kind="multi" if retryable else None,
+            value=None,
             spacing=spacing,
             contract_id=zone.contract_id,
         )
@@ -379,6 +384,16 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
 
         remaining = max(0.0, rec.sent_monotonic + rec.confirm_timeout - time.monotonic())
         self._cancel_confirm[key] = async_call_later(self.hass, remaining + 1, _timeout)
+
+    @property
+    def pulse_interval(self) -> float:
+        from .const import CONF_PULSE_INTERVAL, DEFAULT_PULSE_INTERVAL
+
+        return float(self.config_entry.options.get(CONF_PULSE_INTERVAL, DEFAULT_PULSE_INTERVAL))
+
+    @callback
+    def async_set_desired(self, zone_key: str, values: dict[str, Any]) -> None:
+        self.drift.set_desired(zone_key, values)
 
     @property
     def max_retries(self) -> int:
@@ -426,22 +441,38 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                         break  # reached or overshot
                     remaining = min(abs(left), cap - count)
 
+    async def _execute_all(
+        self, zone: HvacZone, expected: dict[str, Any], spacing: float, sent: list[dict[str, Any]]
+    ) -> None:
+        """Apply several targets in a safe order: power first, then setpoint, then fan."""
+        for kind in (KIND_POWER, KIND_TARGET, KIND_FAN):
+            if kind in expected:
+                if sent and kind != KIND_POWER:
+                    zone = await self.async_read_zone(zone) or zone
+                await self._execute(zone, kind, expected[kind], spacing, sent)
+
     async def async_command(
-        self, zone: HvacZone, kind: str, value: Any, description: str, spacing: float
+        self,
+        zone: HvacZone,
+        expected: dict[str, Any],
+        description: str,
+        spacing: float,
+        set_desired: bool = True,
     ) -> list[dict[str, Any]]:
-        """Execute + track a user command. Caller holds the contract command lock."""
+        """Execute + track a command. Caller holds the contract command lock."""
+        if set_desired:
+            self.async_set_desired(zone.key, expected)
         sent: list[dict[str, Any]] = []
         started = time.monotonic()
-        expected = {kind: value}
         try:
-            await self._execute(zone, kind, value, spacing, sent)
+            await self._execute_all(zone, expected, spacing, sent)
         except MsheirebError as err:
-            self.track_command(zone, description, expected, sent, error=str(err),
-                               started_monotonic=started, spacing=spacing, kind=kind, value=value)
+            self.track_command(zone, description, dict(expected), sent, error=str(err),
+                               started_monotonic=started, spacing=spacing)
             raise
         if sent:
-            self.track_command(zone, description, expected, sent,
-                               started_monotonic=started, spacing=spacing, kind=kind, value=value)
+            self.track_command(zone, description, dict(expected), sent,
+                               started_monotonic=started, spacing=spacing)
         return sent
 
     async def _async_retry(self, rec: CommandRecord) -> None:
@@ -463,7 +494,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
                 new: list[dict[str, Any]] = []
                 started = time.monotonic()
                 try:
-                    await self._execute(fresh, rec.kind, rec.value, rec.spacing, new)
+                    await self._execute_all(fresh, rec.expected, rec.spacing, new)
                 finally:
                     rec.pulses.extend(new)
                 if not new:
@@ -493,6 +524,8 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
             self._cancel_confirm.pop(rec.zone_key)()
 
     def _fail(self, rec: CommandRecord, error: str | None) -> None:
+        # don't let drift-restore immediately repeat a command that just failed
+        self.drift.mark_handled(rec.zone_key)
         rec.result = CMD_NOT_CONFIRMED
         rec.error = error
         self.health.commands_failed += 1

@@ -96,6 +96,16 @@ SENSORS: tuple[HealthSensorDef, ...] = (
         "command_retries", lambda c: c.health.command_retries, state_class=SensorStateClass.TOTAL_INCREASING
     ),
     HealthSensorDef(
+        "drift_events",
+        lambda c: c.drift.events,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        attrs=lambda c: (
+            {"last_room": c.drift.last_event.room, "last_changes": c.drift.last_event.changes,
+             "last_action": c.drift.last_event.action, "last_at": c.drift.last_event.at}
+            if c.drift.last_event else {}
+        ),
+    ),
+    HealthSensorDef(
         "commands_failed", lambda c: c.health.commands_failed, state_class=SensorStateClass.TOTAL_INCREASING
     ),
 )

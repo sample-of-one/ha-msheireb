@@ -6,12 +6,14 @@ from homeassistant.const import CONF_EMAIL, CONF_PASSWORD, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.storage import Store
 
 from .api import MsheirebApi
-from .const import CONF_ACCESS_TOKEN, CONF_EXPIRES_AT, CONF_REFRESH_TOKEN, DOMAIN
+from .const import CONF_ACCESS_TOKEN, CONF_EXPIRES_AT, CONF_REFRESH_TOKEN, DOMAIN, STORE_VERSION
+from .drift import store_key
 from .coordinator import MsheirebCoordinator
 
-PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.BINARY_SENSOR, Platform.SENSOR]
+PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH]
 
 type MsheirebConfigEntry = ConfigEntry[MsheirebCoordinator]
 
@@ -41,6 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: MsheirebConfigEntry) -> 
         status_callback=lambda status: coordinator.on_auth_status(status),
     )
     coordinator = MsheirebCoordinator(hass, entry, api)
+    await coordinator.drift.async_load()  # desired state survives restarts
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     entry.async_on_unload(coordinator.async_cancel_pending)
@@ -67,3 +70,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: MsheirebConfigEntry) ->
 
 async def async_remove_entry(hass: HomeAssistant, entry: MsheirebConfigEntry) -> None:
     ir.async_delete_issue(hass, DOMAIN, f"reauth_{entry.entry_id}")
+    await Store(hass, STORE_VERSION, store_key(entry.entry_id)).async_remove()

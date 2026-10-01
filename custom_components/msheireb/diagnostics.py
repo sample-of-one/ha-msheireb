@@ -76,6 +76,18 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         "commands_failed": h.commands_failed,
         "last_commands": {k: {**r.as_attributes(), "result": r.result} for k, r in h.commands.items()},
         "active_notifications": sorted(coordinator.alerts.active),
+        "drift": {
+            "mode": coordinator.drift.mode,
+            "grace_s": coordinator.drift.grace,
+            "adopt_external": coordinator.drift.adopt,
+            "desired": coordinator.drift.desired,
+            "auto_restore": coordinator.drift.auto_restore,
+            "episodes": {k: {"polls": e.polls, "diff": {kk: list(v) for kk, v in e.diff.items()},
+                             "handled": e.handled, "restored": e.restored}
+                         for k, e in coordinator.drift.episodes.items()},
+            "events": coordinator.drift.events,
+            "last_event": coordinator.drift.last_event.__dict__ if coordinator.drift.last_event else None,
+        },
     }
     data = dict(entry.data)
     data.pop(CONF_EXPIRES_AT, None)
