@@ -221,3 +221,16 @@ async def test_options_use_selectors_and_store_ints(hass):
     result = await hass.config_entries.options.async_init(entry.entry_id)
     with pytest.raises(vol.Invalid):
         result["data_schema"]({**opts, "max_retries": 6})
+
+
+def test_help_texts_are_one_short_line():
+    import json
+    import pathlib
+
+    base = pathlib.Path(__file__).parent.parent / "custom_components" / "msheireb"
+    for f in ("strings.json", "translations/en.json"):
+        d = json.loads((base / f).read_text())
+        texts = list(d["options"]["step"]["init"]["data_description"].values())
+        texts += [s["description"] for s in d["config"]["step"].values() if "description" in s]
+        for t in texts:
+            assert len(t) < 60 and "\n" not in t, t

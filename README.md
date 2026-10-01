@@ -39,7 +39,18 @@ The portal's controller accepts **pulse** commands. Each *Temp Up/Down* pulse mo
 ### Configure
 **Settings → Devices & services → Add integration → Msheireb Smart Home**. Enter your portal email and password once. Tokens are stored in the config entry and refreshed automatically (24 h access token, rotating 7-day refresh token). If the refresh token expires, the integration logs in again with the stored credentials. If the password changes, Home Assistant prompts you to re-authenticate.
 
-**Options** (Configure button; all numeric options are number boxes with units): min/max target temperature (default 18–30 °C), polling interval (default 300 s = 5 min, range 15–600 s; existing installs keep their saved value), pulse spacing (default 5.0 s, range 0.5–10 s), automatic retries (default 2, range 0–5), on external change (default restore + notify), external-change grace period (default 60 s), adopt external changes (default off), notifications on/off (default on).
+**Options** (Configure button; all numeric options are number boxes with units):
+
+| Option | Default | Range | Details |
+|---|---|---|---|
+| Minimum / maximum target temperature | 18 / 30 °C | 10–35 °C, 0.5 steps | Limits of the thermostat cards. |
+| Polling interval | 300 s (5 min) | 15–600 s | How often the portal is polled. Commands get their own refreshes (~5 s after sending and at the end of the confirmation window), independent of this. Existing installs keep their saved value. |
+| Pulse spacing | 5.0 s | 0.5–10 s, 0.5 steps | Time between consecutive Temp Up/Down presses; the AC misses presses sent too fast. |
+| Automatic retries | 2 | 0–5 (0 = off) | Re-sends a command the AC did not confirm (see below). |
+| On external change | restore + notify | restore + notify / restore / notify / ignore | What to do when the wall panel, the portal or a power outage changes a room. |
+| Grace period | 60 s | 0–3600 s | How long a change must persist, **and** at least 2 polls, before acting. With 5-min polling that is about 5–10 min after the change. |
+| Adopt external changes | off | | Treat external changes as the new desired state instead of restoring. |
+| Notifications | on | | Login failure, controller/portal offline, unconfirmed commands. |
 
 A command counts as *confirmed* when a later poll shows the requested state (setpoint, power or fan). The confirmation window scales with the number of presses: **presses × pulse spacing + 20 s**, counted from the first press. For example, a 2 °C change is 4 presses, which gives 4 × 5 s + 20 s = 40 s. If the state doesn't match within that window, the integration **retries automatically** (default 2 retries, configurable 0–5). It re-reads the actual state first. For temperature, it sends only the presses still needed from the actual setpoint. For power and fan, it re-sends the press only if the actual state still differs, so it never toggles blindly. Each retry gets its own window (retry presses × spacing + 20 s). Only after the final retry fails does the command become *not confirmed*, which increments "Commands failed" and sends a notification. Counters reset when Home Assistant restarts. Confirmation does not wait for the regular poll: besides the refresh ~5 s after the command, the integration refreshes again when each confirmation window ends.
 

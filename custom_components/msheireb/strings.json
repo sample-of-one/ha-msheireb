@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Msheireb resident portal",
-        "description": "Sign in with the same email and password you use at web-prod.mp-mdd.com.",
+        "description": "Use your Msheireb resident portal login.",
         "data": {
           "email": "Email",
           "password": "Password"
@@ -11,7 +11,7 @@
       },
       "reauth_confirm": {
         "title": "Re-authenticate Msheireb",
-        "description": "The saved login no longer works. Enter your portal password again.",
+        "description": "The saved login stopped working. Sign in again.",
         "data": {
           "email": "Email",
           "password": "Password"
@@ -45,15 +45,15 @@
           "adopt_external": "Adopt external changes as the new desired state"
         },
         "data_description": {
-          "min_temp": "Lowest setpoint the thermostat cards allow (°C, 0.5 steps).",
-          "max_temp": "Highest setpoint the thermostat cards allow (°C, 0.5 steps).",
-          "scan_interval": "How often the portal is polled (15–600 s, default 300 s = 5 min). Commands get their own refreshes (~5 s after sending and at the end of the confirmation window), independent of this.",
-          "pulse_interval": "Time between consecutive button presses; the AC misses presses sent too fast (0.5–10 s, default 5).",
-          "notifications": "Login failure, controller/portal offline, unconfirmed commands.",
-          "max_retries": "0 = off. Re-sends a command that the AC did not confirm.",
-          "external_change": "What to do when the wall panel, the portal or a power outage changes a room.",
-          "drift_grace": "How long a change must persist, and at least 2 polls, before acting (0–3600 s). With 5-min polling, external changes are handled about 5–10 min after they happen.",
-          "adopt_external": "Treat external changes as the new desired state instead of restoring."
+          "min_temp": "Lowest setpoint allowed.",
+          "max_temp": "Highest setpoint allowed.",
+          "scan_interval": "How often the portal is polled.",
+          "pulse_interval": "Time between Temp Up/Down presses.",
+          "notifications": "Alerts for login, offline and failed commands.",
+          "max_retries": "Re-sends unconfirmed commands (0 = off).",
+          "external_change": "What to do when a room is changed outside HA.",
+          "drift_grace": "How long a change must persist before acting.",
+          "adopt_external": "Keep external changes instead of restoring."
         }
       }
     },
