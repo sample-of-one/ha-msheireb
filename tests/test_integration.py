@@ -177,3 +177,47 @@ async def test_default_pulse_spacing_and_option_range(hass):  # 5.0 default, 0.5
                            "pulse_interval": 0.5, "max_retries": 2, "notifications": True})
     result["data_schema"]({"min_temp": 18, "max_temp": 30, "scan_interval": 30,
                            "pulse_interval": 10.0, "max_retries": 0, "notifications": True})
+
+
+async def test_options_use_selectors_and_store_ints(hass):
+    """Numeric options are sliders/boxes with units; whole-number options are stored as int."""
+    from homeassistant.helpers.selector import BooleanSelector, NumberSelector, SelectSelector
+
+    entry, _ = await _setup(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    schema = result["data_schema"].schema
+    sel = {str(k): v for k, v in schema.items()}
+    expect = {  # key: (min, max, step, unit, mode)
+        "max_retries": (0, 5, 1, None, "slider"),
+        "pulse_interval": (0.5, 10, 0.5, "s", "slider"),
+        "min_temp": (10, 35, 0.5, "°C", "slider"),
+        "max_temp": (10, 35, 0.5, "°C", "slider"),
+        "scan_interval": (15, 600, 1, "s", "box"),
+        "drift_grace": (0, 3600, 1, "s", "box"),
+    }
+    for key, (lo, hi, step, unit, mode) in expect.items():
+        assert isinstance(sel[key], NumberSelector), key
+        cfg = sel[key].config
+        assert (cfg["min"], cfg["max"], cfg["step"], cfg.get("unit_of_measurement"), cfg["mode"]) == \
+            (lo, hi, step, unit, mode), key
+    assert isinstance(sel["external_change"], SelectSelector)
+    assert isinstance(sel["adopt_external"], BooleanSelector) and isinstance(sel["notifications"], BooleanSelector)
+
+    # NumberSelector hands back floats: they must be stored as int where the option is whole-number
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {
+        "min_temp": 18.0, "max_temp": 27.0, "scan_interval": 45.0, "pulse_interval": 1.5, "max_retries": 3.0,
+        "external_change": "notify", "drift_grace": 90.0, "adopt_external": False, "notifications": True})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    opts = entry.options
+    for key, val in (("scan_interval", 45), ("max_retries", 3), ("drift_grace", 90)):
+        assert opts[key] == val and type(opts[key]) is int, key
+    for key, val in (("min_temp", 18.0), ("max_temp", 27.0), ("pulse_interval", 1.5)):
+        assert opts[key] == val and type(opts[key]) is float, key
+    await hass.async_block_till_done()
+    assert hass.states.get("climate.msheireb_demo01_dining_room").attributes["max_temp"] == 27
+
+    # out-of-range values are rejected by the selectors
+    import voluptuous as vol
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    with pytest.raises(vol.Invalid):
+        result["data_schema"]({**opts, "max_retries": 6})

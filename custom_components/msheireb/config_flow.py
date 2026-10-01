@@ -11,7 +11,18 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import SelectSelector, SelectSelectorConfig, SelectSelectorMode
+from homeassistant.helpers.selector import (
+    BooleanSelector,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
 
 from .api import MsheirebApi, MsheirebAuthError, MsheirebError
 from .const import (
@@ -89,7 +100,7 @@ class MsheirebConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema(
-                {vol.Required(CONF_EMAIL): str, vol.Required(CONF_PASSWORD): str}
+                {vol.Required(CONF_EMAIL): EMAIL_SELECTOR, vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR}
             ),
             errors=errors,
         )
@@ -121,8 +132,8 @@ class MsheirebConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_EMAIL, default=entry.data.get(CONF_EMAIL, "")): str,
-                    vol.Required(CONF_PASSWORD): str,
+                    vol.Required(CONF_EMAIL, default=entry.data.get(CONF_EMAIL, "")): EMAIL_SELECTOR,
+                    vol.Required(CONF_PASSWORD): PASSWORD_SELECTOR,
                 }
             ),
             errors=errors,
@@ -134,32 +145,77 @@ class MsheirebConfigFlow(ConfigFlow, domain=DOMAIN):
         return MsheirebOptionsFlow()
 
 
+TEMP_MIN_LIMIT = 10.0
+TEMP_MAX_LIMIT = 35.0
+SCAN_MIN, SCAN_MAX = 15, 600
+GRACE_MAX = 3600
+INT_OPTIONS = (CONF_SCAN_INTERVAL, CONF_MAX_RETRIES, CONF_DRIFT_GRACE)
+FLOAT_OPTIONS = (CONF_MIN_TEMP, CONF_MAX_TEMP, CONF_PULSE_INTERVAL)
+
+EMAIL_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="username"))
+PASSWORD_SELECTOR = TextSelector(TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="current-password"))
+
+
+def _num(min_: float, max_: float, step: float, unit: str | None = None,
+         mode: NumberSelectorMode = NumberSelectorMode.SLIDER) -> NumberSelector:
+    cfg = NumberSelectorConfig(min=min_, max=max_, step=step, mode=mode)
+    if unit:
+        cfg["unit_of_measurement"] = unit
+    return NumberSelector(cfg)
+
+
+def _clamp(value: Any, lo: float, hi: float, default: float) -> float:
+    try:
+        return min(max(float(value), lo), hi)
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_options(data: dict[str, Any]) -> dict[str, Any]:
+    """NumberSelector returns floats; store whole-number options as int."""
+    out = dict(data)
+    for key in INT_OPTIONS:
+        if key in out and out[key] is not None:
+            out[key] = int(round(float(out[key])))
+    for key in FLOAT_OPTIONS:
+        if key in out and out[key] is not None:
+            out[key] = float(out[key])
+    return out
+
+
 class MsheirebOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
+            user_input = normalize_options(user_input)
             if user_input[CONF_MIN_TEMP] >= user_input[CONF_MAX_TEMP]:
                 errors["base"] = "min_ge_max"
             else:
                 return self.async_create_entry(data=user_input)
-        opts = self.config_entry.options
+        opts = {**self.config_entry.options, **(user_input or {})}
         schema = vol.Schema(
             {
-                vol.Required(CONF_MIN_TEMP, default=opts.get(CONF_MIN_TEMP, DEFAULT_MIN_TEMP)): vol.All(
-                    vol.Coerce(float), vol.Range(min=5, max=40)
-                ),
-                vol.Required(CONF_MAX_TEMP, default=opts.get(CONF_MAX_TEMP, DEFAULT_MAX_TEMP)): vol.All(
-                    vol.Coerce(float), vol.Range(min=5, max=40)
-                ),
                 vol.Required(
-                    CONF_SCAN_INTERVAL, default=opts.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-                ): vol.All(vol.Coerce(int), vol.Range(min=15, max=600)),
+                    CONF_MIN_TEMP,
+                    default=_clamp(opts.get(CONF_MIN_TEMP), TEMP_MIN_LIMIT, TEMP_MAX_LIMIT, DEFAULT_MIN_TEMP),
+                ): _num(TEMP_MIN_LIMIT, TEMP_MAX_LIMIT, 0.5, "°C"),
                 vol.Required(
-                    CONF_PULSE_INTERVAL, default=opts.get(CONF_PULSE_INTERVAL, DEFAULT_PULSE_INTERVAL)
-                ): vol.All(vol.Coerce(float), vol.Range(min=PULSE_INTERVAL_MIN, max=PULSE_INTERVAL_MAX)),
+                    CONF_MAX_TEMP,
+                    default=_clamp(opts.get(CONF_MAX_TEMP), TEMP_MIN_LIMIT, TEMP_MAX_LIMIT, DEFAULT_MAX_TEMP),
+                ): _num(TEMP_MIN_LIMIT, TEMP_MAX_LIMIT, 0.5, "°C"),
                 vol.Required(
-                    CONF_MAX_RETRIES, default=opts.get(CONF_MAX_RETRIES, DEFAULT_MAX_RETRIES)
-                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=MAX_RETRIES_LIMIT)),
+                    CONF_SCAN_INTERVAL,
+                    default=int(_clamp(opts.get(CONF_SCAN_INTERVAL), SCAN_MIN, SCAN_MAX, DEFAULT_SCAN_INTERVAL)),
+                ): _num(SCAN_MIN, SCAN_MAX, 1, "s", NumberSelectorMode.BOX),
+                vol.Required(
+                    CONF_PULSE_INTERVAL,
+                    default=_clamp(opts.get(CONF_PULSE_INTERVAL), PULSE_INTERVAL_MIN, PULSE_INTERVAL_MAX,
+                                   DEFAULT_PULSE_INTERVAL),
+                ): _num(PULSE_INTERVAL_MIN, PULSE_INTERVAL_MAX, 0.5, "s"),
+                vol.Required(
+                    CONF_MAX_RETRIES,
+                    default=int(_clamp(opts.get(CONF_MAX_RETRIES), 0, MAX_RETRIES_LIMIT, DEFAULT_MAX_RETRIES)),
+                ): _num(0, MAX_RETRIES_LIMIT, 1),
                 vol.Required(
                     CONF_EXTERNAL_CHANGE, default=opts.get(CONF_EXTERNAL_CHANGE, DEFAULT_EXTERNAL_CHANGE)
                 ): SelectSelector(
@@ -168,14 +224,15 @@ class MsheirebOptionsFlow(OptionsFlow):
                     )
                 ),
                 vol.Required(
-                    CONF_DRIFT_GRACE, default=opts.get(CONF_DRIFT_GRACE, DEFAULT_DRIFT_GRACE)
-                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=3600)),
+                    CONF_DRIFT_GRACE,
+                    default=int(_clamp(opts.get(CONF_DRIFT_GRACE), 0, GRACE_MAX, DEFAULT_DRIFT_GRACE)),
+                ): _num(0, GRACE_MAX, 1, "s", NumberSelectorMode.BOX),
                 vol.Required(
-                    CONF_ADOPT_EXTERNAL, default=opts.get(CONF_ADOPT_EXTERNAL, DEFAULT_ADOPT_EXTERNAL)
-                ): bool,
+                    CONF_ADOPT_EXTERNAL, default=bool(opts.get(CONF_ADOPT_EXTERNAL, DEFAULT_ADOPT_EXTERNAL))
+                ): BooleanSelector(),
                 vol.Required(
-                    CONF_NOTIFICATIONS, default=opts.get(CONF_NOTIFICATIONS, DEFAULT_NOTIFICATIONS)
-                ): bool,
+                    CONF_NOTIFICATIONS, default=bool(opts.get(CONF_NOTIFICATIONS, DEFAULT_NOTIFICATIONS))
+                ): BooleanSelector(),
             }
         )
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)

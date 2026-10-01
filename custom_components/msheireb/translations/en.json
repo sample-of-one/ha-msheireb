@@ -34,15 +34,26 @@
       "init": {
         "title": "Msheireb options",
         "data": {
-          "min_temp": "Minimum target temperature (°C)",
-          "max_temp": "Maximum target temperature (°C)",
-          "scan_interval": "Polling interval (seconds)",
-          "pulse_interval": "Pulse spacing in seconds between Temp Up/Down presses (0.5–10)",
-          "notifications": "Show notifications (login failure, controller/portal offline, unconfirmed commands)",
-          "max_retries": "Automatic retries for unconfirmed commands (0 = off)",
-          "external_change": "On external change (wall panel, portal, power outage)",
-          "drift_grace": "Grace period before acting on an external change (seconds, needs 2+ polls)",
+          "min_temp": "Minimum target temperature",
+          "max_temp": "Maximum target temperature",
+          "scan_interval": "Polling interval",
+          "pulse_interval": "Pulse spacing between Temp Up/Down presses",
+          "notifications": "Show notifications",
+          "max_retries": "Automatic retries for unconfirmed commands",
+          "external_change": "On external change",
+          "drift_grace": "Grace period before acting on an external change",
           "adopt_external": "Adopt external changes as the new desired state"
+        },
+        "data_description": {
+          "min_temp": "Lowest setpoint the thermostat cards allow (°C, 0.5 steps).",
+          "max_temp": "Highest setpoint the thermostat cards allow (°C, 0.5 steps).",
+          "scan_interval": "How often the portal is polled (15–600 s).",
+          "pulse_interval": "Time between consecutive button presses; the AC misses presses sent too fast (0.5–10 s, default 5).",
+          "notifications": "Login failure, controller/portal offline, unconfirmed commands.",
+          "max_retries": "0 = off. Re-sends a command that the AC did not confirm.",
+          "external_change": "What to do when the wall panel, the portal or a power outage changes a room.",
+          "drift_grace": "How long a change must persist (and at least 2 polls) before acting (0–3600 s).",
+          "adopt_external": "Treat external changes as the new desired state instead of restoring."
         }
       }
     },
