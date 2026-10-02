@@ -195,8 +195,8 @@ async def test_fast_unlock_shows_unlocking_for_2s_then_open_5s(hass, freezer):
     await coord.async_refresh()  # a poll during the open window does not overwrite it
     await hass.async_block_till_done()
     assert hass.states.get(DOOR).state == "unlocked"
-    await _tick(hass, freezer, 5.5)  # (the test timer helper fires up to 0.5 s early)
-    assert hass.states.get(DOOR).state == "unlocked"  # unlocked for the full 6.5 s
+    await _tick(hass, freezer, 5.0)  # (the test timer helper fires up to 0.5 s early)
+    assert hass.states.get(DOOR).state == "unlocked"  # unlocked for the full 6 s
     await _tick(hass, freezer, 1.1)
     assert hass.states.get(DOOR).state == "locked"
     assert [st for st, _i in seen] == ["unlocking", "unlocked", "locked"]
@@ -240,8 +240,14 @@ async def test_unlocking_written_before_the_request_and_held_while_pending(hass,
         release_status.set()
         await task
     await hass.async_block_till_done()
-    assert hass.states.get(DOOR).state == "unlocked"  # > 2 s already: unlocked at once
-    await _tick(hass, freezer, 6.6)
+    assert hass.states.get(DOOR).state == "unlocking"  # > 2 s already, but the lock needs 1.5 s more
+    await _tick(hass, freezer, 0.9)  # (the test timer helper fires up to 0.5 s early)
+    assert hass.states.get(DOOR).state == "unlocking"
+    await _tick(hass, freezer, 0.7)
+    assert hass.states.get(DOOR).state == "unlocked"
+    await _tick(hass, freezer, 5.0)
+    assert hass.states.get(DOOR).state == "unlocked"
+    await _tick(hass, freezer, 1.1)
     assert hass.states.get(DOOR).state == "locked"
 
 

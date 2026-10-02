@@ -5,8 +5,8 @@ POST /smart-lock/contract-access-point {contract_id, state: "unlock", duration: 
 success, a refetch of GET /smart-lock/contract-status/{id} (awaited in onSuccess; a failed refetch
 does not fail the unlock). No timer, websocket or push event is involved, and the status endpoint
 reports only connected/outdated/low_battery, not locked/open. So: success = the POST returned 2xx.
-HA shows 'unlocking' for at least MIN_UNLOCKING s (so it is visible), then 'unlocked' for the requested
-duration plus RELOCK_EXTRA (the real lock re-locks a bit later), then 'locked'.
+HA shows 'unlocking' for at least MIN_UNLOCKING s (so it is visible), until UNLOCKED_DELAY after the portal accepts,
+then 'unlocked' for UNLOCKED_FOR s (matching the real lock), then 'locked'.
 """
 from __future__ import annotations
 
@@ -36,7 +36,8 @@ DOOR_UNLOCKING = "unlocking"
 DOOR_OPEN = "unlocked"
 DOOR_FAILED = "failed"
 DOOR_STATES = [DOOR_LOCKED, DOOR_UNLOCKING, DOOR_OPEN, DOOR_FAILED]
-RELOCK_EXTRA = 1.5  # s: the real lock re-locks ~1.5 s after the requested duration ends
+UNLOCKED_DELAY = 1.5  # s: the real lock takes ~1.5 s to release after the portal accepts
+UNLOCKED_FOR = 6.0  # s: how long the real lock stays unlocked
 MIN_UNLOCKING = 2.0  # s: 'unlocking' stays visible at least this long, even if the portal is faster
 FAILED_HOLD = 10.0  # s: 'failed' is shown this long, then back to 'locked'
 
@@ -156,9 +157,9 @@ class DoorManager:
             _LOGGER.debug("Lock status refresh after unlock failed: %s", err)
         _LOGGER.info("Door unlock accepted by the portal")
         self._fire(contract_id, "success", duration, None, source, entity_id)
-        open_for = duration_seconds(duration) + RELOCK_EXTRA
+        open_for = UNLOCKED_FOR
         relock = lambda: self._later(contract_id, open_for, DOOR_LOCKED)  # noqa: E731
-        wait = MIN_UNLOCKING - (time.monotonic() - started)
+        wait = max(MIN_UNLOCKING - (time.monotonic() - started), UNLOCKED_DELAY)
         if wait > 0:
             self._later(contract_id, wait, DOOR_OPEN, relock)
         else:

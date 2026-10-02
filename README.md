@@ -49,10 +49,10 @@ The apartment device has an **Unlock door** button (the only control, opt-in) an
 |---|---|---|
 | `locked` | `mdi:lock` | Normal state. |
 | `unlocking` | `mdi:lock-clock` | Shown as soon as the button is pressed, while the request and then the lock status re-read are pending (the portal waits for both). Shown for at least ~2 s so it is visible even if the portal answers faster. |
-| `unlocked` | `mdi:lock-open-variant` | For the unlock duration plus 1.5 s (6.5 s), matching when the real lock re-locks. |
+| `unlocked` | `mdi:lock-open-variant` | From ~1.5 s after the portal accepts (the lock needs a moment to release), for 6 s, matching the real lock. |
 | `failed` | `mdi:lock-alert` | For ~10 s if the portal refused or could not be reached, with the portal's message in `message`/`problem`; then `locked`. |
 
-- **No real lock state:** the portal's lock status endpoint reports only *connected*, *outdated* and *low battery*, not locked/unlocked/open. So *unlocked* is based on the accepted request plus the 6.5 s window, the same success condition the portal uses.
+- **No real lock state:** the portal's lock status endpoint reports only *connected*, *outdated* and *low battery*, not locked/unlocked/open. So *unlocked* is based on the accepted request plus those timings, the same success condition the portal uses.
 - **Polls don't interfere:** the state comes from the unlock itself, so regular polls never overwrite it. A second press while *unlocking* is refused.
 - **Attributes** (these replace the former *Last unlock* sensor): `last_result` (`success`/`failed`), `last_unlock_at`, `unlock_duration`, `message`, `problem` (cleared by the next successful unlock), `lock_connected`, `lock_outdated`, `low_battery`.
 - **Upgrade from 0.3.12:** the *Door* lock entity and the *Last unlock* sensor are removed from the entity registry automatically.
