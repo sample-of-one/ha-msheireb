@@ -204,6 +204,9 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         from .drift import DriftManager
 
         self.drift = DriftManager(hass, self)
+        from .door import DoorManager
+
+        self.door = DoorManager(self)
 
     # ---------------------------------------------------------------- health listeners
     @callback
@@ -869,6 +872,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
 
     @callback
     def async_cancel_pending(self) -> None:
+        self.door.async_cancel()
         if self._cancel_refresh:
             self._cancel_refresh()
             self._cancel_refresh = None

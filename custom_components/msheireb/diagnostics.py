@@ -104,5 +104,6 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         "health": health,
         "last_unlock": {"contracts": len(coordinator.last_unlock),
                         "results": [r.get("result") for r in coordinator.last_unlock.values()]},
+        "door_states": [d.state for d in coordinator.door.doors.values()],
         "contracts": contracts,
     }

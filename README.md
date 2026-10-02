@@ -39,15 +39,41 @@ The behaviour below is the default (**Fan to Auto when off** = on). With that op
 - The desired state used for external-change detection is *off + fan Auto* while off and the restored speed after turning on. While a room is off, fan differences are ignored; turning it on at the wall panel is still detected.
 - Debug logging shows the raw fan readings and the derived fan mode for every read.
 
-## Door unlock button (opt-in)
+## Door lock and unlock button (opt-in)
 
-The apartment device can show an **Unlock door** button that does exactly what the portal's *Unlock (5s)* button does: `POST /smart-lock/contract-access-point` with `{"contract_id": …, "state": "unlock", "duration": "5s"}` (a temporary unlock of the apartment's smart lock; the portal asks for no PIN or OTP). After a successful request the lock status is refreshed, and the **Last unlock** sensor shows the result (`success`/`failed`), time and the portal's message.
+The apartment device can show a **Door** lock entity and an **Unlock door** button. Both do exactly what the portal's *Unlock (5s)* button does: `POST /smart-lock/contract-access-point` with `{"contract_id": …, "state": "unlock", "duration": "5s"}`. This is a temporary unlock of the apartment's smart lock; the portal asks for no PIN or OTP.
 
-> **Security note:** anyone or anything that can press this button in Home Assistant can open your front door: users, dashboards, automations, voice assistants, the companion app. It is therefore **off twice by default**:
-> 1. the button entity is **disabled** (enable it under the apartment device → Entities), **and**
-> 2. the option **Enable door unlock button** must be turned on; otherwise a press is refused with an error.
+**Door states (mirroring the portal):**
+
+| State | When |
+|---|---|
+| `locked` | Normal state. |
+| `unlocking` | While the portal would show its spinner: the unlock request is pending, then the lock status is re-read (like the portal, which waits for both). |
+| `open` | For the unlock duration (5 s), counted from the moment the portal accepted the request. |
+| `locked` | Again after the 5 s. |
+
+- **No real lock state:** the portal's lock status endpoint reports only *connected*, *outdated* and *low battery*, not locked/unlocked/open. So *open* is based on the accepted request plus the 5 s window, the same success condition the portal uses.
+- **Failure:** the door stays `locked`, the `problem` attribute holds the portal's message, and the next successful unlock clears it.
+- **Attributes:** `unlock_duration`, `problem`, `last_result`, `last_unlock_at`, `lock_connected`, `lock_outdated`, `low_battery`.
+- **Unlocking:** *Unlock* and *Open* on the lock entity and the **Unlock door** button all send the same unlock and drive the same states. A second unlock while one is in progress is refused.
+- **Locking is not supported** (clear error): the door locks again by itself after 5 s.
+- The **Last unlock** sensor shows the result (`success`/`failed`), time and the portal's message.
+
+**Event for automations:** every unlock attempt fires `msheireb_door_unlocked` with `contract_id`, `entity_id`, `result` (`success`/`failed`), `duration`, `message` and `source` (`lock`/`button`). Example trigger:
+
+```yaml
+trigger:
+  - platform: event
+    event_type: msheireb_door_unlocked
+    event_data:
+      result: success
+```
+
+> **Security note:** anyone or anything that can use these entities in Home Assistant can open your front door: users, dashboards, automations, voice assistants, the companion app. They are therefore **off twice by default**:
+> 1. both entities are **disabled** (enable them under the apartment device → Entities), **and**
+> 2. the option **Enable door unlock** must be turned on; otherwise an unlock is refused with an error.
 >
-> Only enable it if you need it, restrict who has HA access, avoid exposing it to voice assistants, and consider wrapping it in a confirmation (e.g. a script with a confirmation dialog). Each unlock is logged at INFO level (without IDs).
+> Only enable it if you need it, restrict who has HA access, avoid exposing the lock to voice assistants, and consider wrapping it in a confirmation (e.g. a script with a confirmation dialog). Each unlock is logged at INFO level (without IDs).
 
 ## How it controls the AC
 The portal's controller accepts **pulse** commands. Each *Temp Up/Down* pulse moves the setpoint by 0.5 °C (verified). To set a temperature, the integration sends the needed number of Up/Down pulses one at a time, 5.0 s apart start-to-start by default (configurable 0.5–10 s; the real AC also registered 3 presses 1.2–1.5 s apart, so you can lower it for faster changes), and re-reads the setpoint every 3 pulses. It never sends more pulses than initially needed. Power and fan pulses are only sent when the reported state differs from the requested one. Control serial numbers are discovered from the control labels, not hard-coded. An extra refresh runs about 5 s after a command, independent of the polling interval.
@@ -89,7 +115,7 @@ The portal's controller accepts **pulse** commands. Each *Temp Up/Down* pulse mo
 | On external change | restore + notify | restore + notify / restore / notify / ignore | What to do when the wall panel, the portal or a power outage changes a room. |
 | Grace period | 60 s | 0–3600 s | How long a change must persist, **and** at least 2 polls, before acting. With 5-min polling that is about 5–10 min after the change. |
 | Adopt external changes | off | | Treat external changes as the new desired state instead of restoring. |
-| Enable door unlock button | off | on / off | Must be on for the (disabled-by-default) *Unlock door* button to work. See the security note. |
+| Enable door unlock | off | on / off | Must be on for the (disabled-by-default) *Door* lock and *Unlock door* button to unlock. See the security note. |
 | Notifications | on | | Login failure, controller/portal offline, unconfirmed commands. |
 
 A command counts as *confirmed* when a later poll shows the requested state (setpoint, power or fan). The confirmation window scales with the number of presses: **presses × pulse spacing + 20 s**, counted from the first press. For example, a 2 °C change is 4 presses, which gives 4 × 5 s + 20 s = 40 s. If the state doesn't match within that window, the integration **retries automatically** (default 2 retries, configurable 0–5). It re-reads the actual state first. For temperature, it sends only the presses still needed from the actual setpoint. For power and fan, it re-sends the press only if the actual state still differs, so it never toggles blindly. Each retry gets its own window (retry presses × spacing + 20 s). Any power wait (*Power settle time*, power polls, *Power → fan delay*) is added to the window, and a command with a fan press also gets *Fan settle time* + 5 s (the gap before the second fan read), so a slow fan is never flagged *not confirmed* too early. Only after the final retry fails does the command become *not confirmed*, which increments "Commands failed" and sends a notification. Counters reset when Home Assistant restarts. Confirmation does not wait for the regular poll: besides the refresh ~5 s after the command, the integration refreshes again when each confirmation window ends.
