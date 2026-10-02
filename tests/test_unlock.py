@@ -173,7 +173,7 @@ async def test_door_sensor_basics(hass):
     await _setup(hass)
     s = hass.states.get(DOOR)
     assert s.state == "locked" and s.attributes["icon"] == "mdi:lock"
-    assert s.attributes["options"] == ["locked", "unlocking", "open", "failed"]
+    assert s.attributes["options"] == ["locked", "unlocking", "unlocked", "failed"]
     assert s.attributes["device_class"] == "enum"
     assert s.attributes["lock_connected"] is True and s.attributes["low_battery"] is False
     assert not hass.states.async_all("lock")  # no lock entity (the portal cannot lock)
@@ -191,16 +191,16 @@ async def test_fast_unlock_shows_unlocking_for_2s_then_open_5s(hass, freezer):
     await _tick(hass, freezer, 1.0)
     assert hass.states.get(DOOR).state == "unlocking"
     await _tick(hass, freezer, 1.1)
-    assert hass.states.get(DOOR).state == "open"
+    assert hass.states.get(DOOR).state == "unlocked"
     await coord.async_refresh()  # a poll during the open window does not overwrite it
     await hass.async_block_till_done()
-    assert hass.states.get(DOOR).state == "open"
-    await _tick(hass, freezer, 4.0)  # (the test timer helper fires up to 0.5 s early)
-    assert hass.states.get(DOOR).state == "open"  # open for the full 5 s
+    assert hass.states.get(DOOR).state == "unlocked"
+    await _tick(hass, freezer, 5.5)  # (the test timer helper fires up to 0.5 s early)
+    assert hass.states.get(DOOR).state == "unlocked"  # unlocked for the full 6.5 s
     await _tick(hass, freezer, 1.1)
     assert hass.states.get(DOOR).state == "locked"
-    assert [st for st, _i in seen] == ["unlocking", "open", "locked"]
-    assert [i for _s, i in seen] == ["mdi:lock-clock", "mdi:door-open", "mdi:lock"]
+    assert [st for st, _i in seen] == ["unlocking", "unlocked", "locked"]
+    assert [i for _s, i in seen] == ["mdi:lock-clock", "mdi:lock-open-variant", "mdi:lock"]
     assert FakeApi.unlock_calls == [(4242, "5s")]
 
 
@@ -240,8 +240,8 @@ async def test_unlocking_written_before_the_request_and_held_while_pending(hass,
         release_status.set()
         await task
     await hass.async_block_till_done()
-    assert hass.states.get(DOOR).state == "open"  # > 2 s already: open at once
-    await _tick(hass, freezer, 5.1)
+    assert hass.states.get(DOOR).state == "unlocked"  # > 2 s already: unlocked at once
+    await _tick(hass, freezer, 6.6)
     assert hass.states.get(DOOR).state == "locked"
 
 
@@ -269,8 +269,8 @@ async def test_failure_shows_failed_for_10s_with_message(hass, freezer):
     await _press(hass)
     await _tick(hass, freezer, 2.1)
     s = hass.states.get(DOOR)
-    assert s.state == "open" and s.attributes["problem"] is None and s.attributes["last_result"] == "success"
-    await _tick(hass, freezer, 5.1)
+    assert s.state == "unlocked" and s.attributes["problem"] is None and s.attributes["last_result"] == "success"
+    await _tick(hass, freezer, 6.6)
 
 
 async def test_retired_lock_and_last_unlock_entities_removed(hass):

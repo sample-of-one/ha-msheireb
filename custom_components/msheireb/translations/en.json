@@ -141,7 +141,7 @@
         "state": {
           "locked": "Locked",
           "unlocking": "Unlocking",
-          "open": "Open",
+          "unlocked": "Unlocked",
           "failed": "Failed"
         }
       }

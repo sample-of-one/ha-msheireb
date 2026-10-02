@@ -42,5 +42,5 @@ class UnlockDoorButton(MsheirebEntity, ButtonEntity):
         self._attr_unique_id = f"{contract_id}_door_unlock"
 
     async def async_press(self) -> None:
-        # same state machine as the Door lock entity (locked -> unlocking -> open -> locked)
+        # same state machine as the Door lock entity (locked -> unlocking -> unlocked -> locked)
         await self.coordinator.door.async_unlock(self._contract_id, "button", self.entity_id)

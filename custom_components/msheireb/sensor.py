@@ -25,7 +25,7 @@ from .door import DOOR_FAILED, DOOR_LOCKED, DOOR_OPEN, DOOR_STATES, DOOR_UNLOCKI
 from .entity import room_device, room_entity_id, zone_needs_disambiguation
 
 
-DOOR_ICONS = {DOOR_LOCKED: "mdi:lock", DOOR_UNLOCKING: "mdi:lock-clock", DOOR_OPEN: "mdi:door-open",
+DOOR_ICONS = {DOOR_LOCKED: "mdi:lock", DOOR_UNLOCKING: "mdi:lock-clock", DOOR_OPEN: "mdi:lock-open-variant",
               DOOR_FAILED: "mdi:lock-alert"}
 
 
@@ -162,7 +162,7 @@ class LastCommandSensor(HealthEntity, SensorEntity):
 
 
 class DoorSensor(SensorEntity):
-    """Door: locked / unlocking / open / failed, driven by the unlock button (portal-like feedback).
+    """Door: locked / unlocking / unlocked / failed, driven by the unlock button (portal-like feedback).
 
     The state comes from the door state machine only, so coordinator polls never overwrite a
     transient state; every transition is written immediately.
