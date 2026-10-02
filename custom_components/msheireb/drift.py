@@ -39,12 +39,18 @@ _LOGGER = logging.getLogger(__name__)
 KEYS_ORDER = ("power", "target", "fan")
 
 
+FAN_OFF = "off"  # the climate fan mode 'off' (= room off); never stored as a fan speed
+
+
 def store_key(entry_id: str) -> str:
     return f"{DOMAIN}.{entry_id}.desired"
 
 
 def actual_values(zone: HvacZone) -> dict[str, Any]:
-    return {"power": zone.power, "target": zone.setpoint, "fan": zone.fan_mode(FAN_ROLES)}
+    fan = zone.fan_mode(FAN_ROLES)
+    if fan == FAN_OFF:
+        fan = None  # 'off' is not a speed reading: never a fan-speed drift
+    return {"power": zone.power, "target": zone.setpoint, "fan": fan}
 
 
 def _differs(kind: str, want: Any, have: Any) -> bool:
@@ -114,7 +120,10 @@ class DriftManager:
         data = await self.store.async_load() or {}
         self.desired = {k: dict(v) for k, v in (data.get("desired") or {}).items()}
         self.auto_restore = {k: bool(v) for k, v in (data.get("auto_restore") or {}).items()}
-        self.prev_fan = {k: str(v) for k, v in (data.get("prev_fan") or {}).items() if v}
+        self.prev_fan = {k: str(v) for k, v in (data.get("prev_fan") or {}).items() if v and v != FAN_OFF}
+        for want in self.desired.values():
+            if want.get("fan") == FAN_OFF:
+                want.pop("fan")  # 'off' is a power state, never a desired fan speed
         self.offsets = {}
         for k, v in (data.get("offsets") or {}).items():
             try:
@@ -173,6 +182,11 @@ class DriftManager:
 
     @callback
     def set_desired(self, zone_key: str, values: dict[str, Any]) -> None:
+        values = dict(values)
+        if values.get("fan") == FAN_OFF:
+            # fan 'off' means the room is off: desired power off, never a desired fan speed of 'off'
+            values.pop("fan")
+            values["power"] = False
         self.desired.setdefault(zone_key, {}).update(values)
         if "target" in values:
             self.offset_pending.discard(zone_key)  # the target is being driven with the current offset
@@ -183,6 +197,8 @@ class DriftManager:
     @callback
     def remember_fan(self, zone_key: str, fan: str | None) -> None:
         """Remember the fan speed to re-apply when HA turns the room back on."""
+        if fan == FAN_OFF:
+            return  # 'off' is not a speed
         if fan:
             self.prev_fan[zone_key] = fan
         else:

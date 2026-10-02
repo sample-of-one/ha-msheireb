@@ -112,13 +112,15 @@ async def test_power_and_fan_only_when_different(hass):
     assert api.commands == []
     await hass.services.async_call("climate", "turn_off", {"entity_id": eid}, blocking=True)
     assert hass.states.get(eid).state == HVACMode.OFF  # optimistic
+    assert hass.states.get(eid).attributes["fan_mode"] == "off"  # follows HVAC off
     await hass.services.async_call("climate", "set_fan_mode", {"entity_id": eid, "fan_mode": "medium"}, blocking=True)
-    assert [c["sn"] for c in api.commands] == [1, 2, 4]  # power off, fan auto (off rule), then medium
+    # power off, fan auto (off rule); v0.3.18: medium while off = power on, then medium
+    assert [c["sn"] for c in api.commands] == [1, 2, 1, 4]
     await hass.async_block_till_done()
     await hass.config_entries.async_entries(DOMAIN)[0].runtime_data.async_refresh()
     await hass.async_block_till_done()
     s = hass.states.get(eid)
-    assert s.state == HVACMode.OFF and s.attributes["fan_mode"] == "medium"
+    assert s.state == HVACMode.COOL and s.attributes["fan_mode"] == "medium"
 
 
 async def test_unavailable_when_controller_disconnected(hass):

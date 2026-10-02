@@ -72,6 +72,21 @@
     }
   },
   "entity": {
+    "climate": {
+      "room": {
+        "state_attributes": {
+          "fan_mode": {
+            "state": {
+              "off": "Off",
+              "auto": "Auto",
+              "low": "Low",
+              "medium": "Medium",
+              "high": "High"
+            }
+          }
+        }
+      }
+    },
     "binary_sensor": {
       "controller": {
         "name": "Apartment controller"

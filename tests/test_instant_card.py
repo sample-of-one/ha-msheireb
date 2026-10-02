@@ -129,7 +129,7 @@ async def test_newer_action_supersedes_running_sequence(hass, ac, freezer):
     assert "high" not in ac.presses  # the superseded turn-on stopped before its fan press
     assert ac.presses.count("power") == 2 and not ac.power
     assert hass.states.get(LAST).state == "confirmed"
-    assert _state(hass) == ("off", "auto")
+    assert _state(hass) == ("off", "off") and ac.fan == "auto"  # fan_mode follows HVAC off
     assert not _command_notes(hass)
 
 

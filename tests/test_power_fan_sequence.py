@@ -221,7 +221,7 @@ async def test_turn_off_power_then_auto_after_delay_and_memory_kept(hass, ac, fr
     assert coord.drift.prev_fan[KEY] == "medium"
     await _advance(hass, freezer, 15)
     assert hass.states.get(LAST).state == "confirmed"
-    assert _state(hass) == ("off", "auto")
+    assert _state(hass) == ("off", "off") and ac.fan == "auto"  # v0.3.18: fan_mode follows HVAC off
     # turning off again / drift / our own Auto never overwrite the remembered speed
     await _svc(hass, "turn_off")
     assert coord.drift.prev_fan[KEY] == "medium"
@@ -238,7 +238,7 @@ async def test_power_never_changes_no_fan_press(hass, ac, freezer):
     assert ac.presses == ["power"]  # waited up to 30 s for power; fan not pressed into an off AC
     await _advance(hass, freezer, 60)
     assert coord.health.commands[KEY].result == "not_confirmed"
-    assert _state(hass) == ("off", "auto")
+    assert _state(hass) == ("off", "off")  # reverted to the actual state (off -> fan_mode off)
 
 
 async def test_ambiguous_multi_on_reading_never_confirms(hass, ac, freezer):
@@ -279,7 +279,7 @@ async def test_option_off_turn_off_sends_only_power_and_keeps_fan(hass, ac, free
     await _advance(hass, freezer, 15)  # power confirmed by the post-command refresh
     assert not ac.power and ac.fan == "medium"
     assert hass.states.get(LAST).state == "confirmed"
-    assert _state(hass) == ("off", "medium")
+    assert _state(hass) == ("off", "off") and ac.fan == "medium"  # fan_mode follows HVAC off
 
 
 async def test_option_off_turn_on_power_only_when_speed_kept(hass, ac, freezer):
@@ -500,3 +500,19 @@ async def test_fan_settle_on_retry_and_drift_restore(hass, ac, freezer):
     await _advance(hass, freezer, 30)
     assert coord.health.commands[KEY].result == "confirmed"
     _assert_verification_timing(ac, matches, 10)
+
+
+async def test_v0318_speed_while_off_turns_on_with_power_fan_delay(hass, ac, freezer):
+    """Fan speed chosen while off: power press, wait for the power change + 'Power -> fan delay', then the speed."""
+    entry, coord = await _setup(hass)
+    coord.drift.prev_fan[KEY] = "high"
+    assert _state(hass) == ("off", "off")
+    await _svc(hass, "set_fan_mode", fan_mode="medium")
+    assert ac.presses == ["power", "medium"]
+    (_, t_power), (_, t_fan) = ac.press_times
+    assert t_fan - t_power >= 10 + 5 - 0.01  # power settle (10 s, power applied at ~7 s) + 5 s delay
+    assert ac.power and ac.fan == "medium"  # pressed after start-up -> kept
+    await _advance(hass, freezer, 30)
+    assert hass.states.get(LAST).state == "confirmed"
+    assert _state(hass) == ("cool", "medium")
+    assert coord.drift.prev_fan[KEY] == "medium"  # replaces the remembered High

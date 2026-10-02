@@ -79,7 +79,8 @@ async def test_off_remembers_fan_and_sets_auto_then_on_restores(hass, hass_stora
     assert coord.drift.desired[KEY] == {"power": False, "fan": "auto"}
     await _poll(hass, coord)
     s = hass.states.get(DINING)
-    assert s.state == "off" and s.attributes["fan_mode"] == "auto"
+    assert s.state == "off" and s.attributes["fan_mode"] == "off"  # v0.3.18: follows HVAC off
+    assert coord.data[4242].zones[KEY].fan_mode(("auto", "low", "medium", "high")) == "auto"  # actual fan
     assert coord.health.commands[KEY].result == "confirmed"
     await coord.drift.store.async_save(coord.drift._data_to_save())
     assert hass_storage[store_key("e1")]["data"]["prev_fan"] == {KEY: "high"}
@@ -154,17 +155,19 @@ async def test_fan_change_while_off_is_not_drift(hass):
     assert coord.drift.prev_fan[KEY] == "high"  # memory untouched by the restore
 
 
-async def test_fan_set_from_ha_while_off_is_used_on_turn_on(hass):
+async def test_fan_set_from_ha_while_off_turns_on_at_that_speed(hass):
+    """v0.3.18: a speed chosen while off turns the room on at that speed (was: stays off)."""
     entry, coord, api = await _setup(hass)
     await _svc(hass, "turn_off")
     await _poll(hass, coord)
-    await _svc(hass, "set_fan_mode", fan_mode="medium")
-    assert coord.drift.prev_fan[KEY] == "medium"
-    await _poll(hass, coord)
     api.commands.clear()
-    await _svc(hass, "turn_on")
-    assert _sns(api) == [POWER]  # fan is already medium
-    assert coord.drift.desired[KEY]["fan"] == "medium"
+    await _svc(hass, "set_fan_mode", fan_mode="medium")
+    assert _sns(api) == [POWER, MED]  # power on, then the chosen speed
+    assert coord.drift.prev_fan[KEY] == "medium"  # replaces the remembered High
+    assert coord.drift.desired[KEY] == {"power": True, "fan": "medium"}
+    await _poll(hass, coord)
+    s = hass.states.get(DINING)
+    assert s.state == "cool" and s.attributes["fan_mode"] == "medium"
 
 
 async def test_on_falls_back_to_desired_fan_or_leaves_it(hass):

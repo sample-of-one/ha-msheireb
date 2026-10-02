@@ -7,6 +7,7 @@ from typing import Any
 
 from homeassistant.components.climate import (
     ATTR_HVAC_MODE,
+    FAN_OFF,
     ClimateEntity,
     ClimateEntityFeature,
     HVACMode,
@@ -78,6 +79,7 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
     _attr_precision = 0.5
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.COOL]
     _enable_turn_on_off_backwards_compatibility = False
+    _attr_translation_key = "room"  # fan mode labels (incl. 'off'); the entity name stays the room name
 
     def __init__(
         self,
@@ -97,7 +99,9 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
         self._attr_max_temp = float(entry.options.get(CONF_MAX_TEMP, DEFAULT_MAX_TEMP))
         self._pulse_interval = float(entry.options.get(CONF_PULSE_INTERVAL, DEFAULT_PULSE_INTERVAL))
         self._fan_roles = tuple(r for r in FAN_ROLES if r in zone.controls)
-        self._attr_fan_modes = list(self._fan_roles)
+        # 'off' first (when the room has a power control): choosing it turns the room off
+        self._fan_off = bool(self._fan_roles) and ROLE_POWER in zone.controls
+        self._attr_fan_modes = ([FAN_OFF] if self._fan_off else []) + list(self._fan_roles)
         features = ClimateEntityFeature.TARGET_TEMPERATURE
         if self._fan_roles:
             features |= ClimateEntityFeature.FAN_MODE
@@ -160,7 +164,11 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
 
     @property
     def fan_mode(self) -> str | None:
+        # kept in step with the HVAC mode: 'off' while the room is (or is being turned) off,
+        # otherwise the requested/actual speed
         zone = self.zone
+        if self._fan_off and self._opt("power", zone.power if zone else None) is False:
+            return FAN_OFF
         return self._opt("fan", zone.fan_mode(self._fan_roles) if zone else None)
 
     @property
@@ -311,9 +319,21 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
         await self.async_set_hvac_mode(HVACMode.OFF)
 
     async def async_set_fan_mode(self, fan_mode: str) -> None:
+        if fan_mode == FAN_OFF and self._fan_off:
+            # fan Off = room off (incl. 'Fan to Auto when off': fan Auto, speed remembered)
+            await self.async_set_hvac_mode(HVACMode.OFF)
+            return
         if fan_mode not in self._fan_roles:
             raise HomeAssistantError(f"Unsupported fan mode {fan_mode}")
         zone = self._require_zone()
+        if self._fan_off and self._opt(KIND_POWER, zone.power) is False:
+            # a speed chosen while off: turn on, then (after the power -> fan delay) that speed;
+            # it replaces the remembered speed
+            self.coordinator.drift.remember_fan(zone.key, fan_mode)
+            self._hvac_intent(HVACMode.COOL, zone)
+            self._intent[KIND_FAN] = fan_mode
+            await self._start_if_needed(zone)
+            return
         # an explicit choice from HA is what to re-apply on the next turn-on (on or off)
         self.coordinator.drift.remember_fan(zone.key, fan_mode)
         self._intent[KIND_FAN] = fan_mode
