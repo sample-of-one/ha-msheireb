@@ -28,7 +28,7 @@ from .coordinator import MsheirebCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH, Platform.BUTTON]
+PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH, Platform.BUTTON, Platform.NUMBER]
 
 type MsheirebConfigEntry = ConfigEntry[MsheirebCoordinator]
 

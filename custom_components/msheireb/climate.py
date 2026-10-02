@@ -143,8 +143,12 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
 
     @property
     def target_temperature(self) -> float | None:
+        # the AC runs at target + offset; HA shows the target (AC setpoint - offset)
         zone = self.zone
-        return self._opt("target", zone.setpoint if zone else None)
+        actual = None
+        if zone is not None and zone.setpoint is not None:
+            actual = self.coordinator.from_device(self._zone_key, zone.setpoint)
+        return self._opt("target", actual)
 
     @property
     def hvac_mode(self) -> HVACMode | None:
@@ -168,7 +172,39 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             "room": zone.room_name,
             "device_id": zone.device_id,
             "control_sn": {role: c.sn for role, c in zone.controls.items()},
+            "offset": self.coordinator.offset(self._zone_key),
+            "device_setpoint": zone.setpoint,
         }
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self.coordinator.async_add_offset_listener(self._zone_key, self._offset_changed))
+
+    async def _offset_changed(self, old: float, new: float) -> None:
+        """The room's target offset changed: keep showing the same target and, if the room is on,
+        re-drive the AC to target + new offset (normal queue, debounced like temperature taps)."""
+        zone = self.zone
+        if zone is None:
+            return
+        if KIND_TARGET in self._intent:
+            target = self._intent[KIND_TARGET]
+        elif zone.setpoint is not None:
+            target = _round_step(zone.setpoint - old)  # what the card showed with the old offset
+        else:
+            self.async_write_ha_state()
+            return
+        power = self._opt(KIND_POWER, zone.power)
+        if not power or not self.available:
+            # off (or offline): nothing is pressed now; the next turn-on from HA applies it
+            drift = self.coordinator.drift
+            if drift.desired.get(zone.key, {}).get(KIND_TARGET) is None:
+                drift.desired.setdefault(zone.key, {})[KIND_TARGET] = target  # keep the shown target
+            drift.set_offset_pending(zone.key, True)
+            self.async_write_ha_state()
+            return
+        self.coordinator.drift.set_offset_pending(zone.key, False)
+        self._intent[KIND_TARGET] = target
+        await self._start_if_needed(zone, TEMP_DEBOUNCE)
 
     # ------------------------------------------------------------ commands
     def _require_zone(self) -> HvacZone:
@@ -198,7 +234,7 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             if queued or zone.setpoint is None:
                 # another sequence ran meanwhile: decide from a fresh reading, never toggle blindly
                 zone = await coord.async_read_zone(zone) or zone
-            if coord._zone_matches(zone, expected):
+            if coord.zone_matches_target(zone, expected):
                 coord.async_set_desired(zone.key, expected)
                 return
             parts = ", ".join(f"{k}={v}" for k, v in expected.items())
@@ -221,6 +257,13 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
         fan_auto = bool(self._entry.options.get(CONF_FAN_AUTO_WHEN_OFF, DEFAULT_FAN_AUTO_WHEN_OFF))
         self._intent[KIND_POWER] = want_on
         self._fan_if_differs = False
+        if want_on and zone.key in drift.offset_pending and KIND_TARGET not in self._intent:
+            # the offset changed while off: drive the AC to target + new offset after power-on
+            target = drift.desired.get(zone.key, {}).get(KIND_TARGET)
+            if target is None and zone.setpoint is not None:
+                target = _round_step(zone.setpoint - self.coordinator.offset(zone.key))
+            if target is not None:
+                self._intent[KIND_TARGET] = float(target)
         if not want_on:
             memory = drift.prev_fan.get(zone.key)
             remembered = current_fan or drift.desired.get(zone.key, {}).get(KIND_FAN)
@@ -246,7 +289,7 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
                 self._fan_if_differs = not fan_auto
 
     async def _start_if_needed(self, zone: HvacZone, debounce: float = 0.0) -> None:
-        if not self.coordinator.room_busy(self._zone_key) and self.coordinator._zone_matches(zone, self._intent):
+        if not self.coordinator.room_busy(self._zone_key) and self.coordinator.zone_matches_target(zone, self._intent):
             self.coordinator.async_set_desired(zone.key, dict(self._intent))
             self._intent.clear()
             self._fan_if_differs = False
@@ -291,7 +334,7 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
             current = zone.setpoint
             if current is None:
                 raise HomeAssistantError(f"{self.name}: current setpoint unknown")
-            needed = round((target - current) / TEMP_STEP)
+            needed = round((self.coordinator.device_target(zone.key, target) - current) / TEMP_STEP)
             if needed:
                 role = ROLE_TEMP_UP if needed > 0 else ROLE_TEMP_DOWN
                 if role not in zone.controls:

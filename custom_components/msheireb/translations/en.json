@@ -151,6 +151,11 @@
         "name": "Auto-restore"
       }
     },
+    "number": {
+      "target_offset": {
+        "name": "Target temperature offset"
+      }
+    },
     "button": {
       "unlock_door": {
         "name": "Unlock door"

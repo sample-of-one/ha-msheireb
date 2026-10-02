@@ -49,6 +49,8 @@ from .const import (
     POWER_POLL_INTERVAL,
     DEFAULT_MAX_RETRIES,
     DEFAULT_SCAN_INTERVAL,
+    DEVICE_MAX_SETPOINT,
+    DEVICE_MIN_SETPOINT,
     DOMAIN,
     FAN_ROLES,
     PULSE_VALUE,
@@ -200,6 +202,7 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         self._cancel_confirm: dict[str, CALLBACK_TYPE] = {}
         self._last_fan_press: dict[str, float] = {}
         self._sequences: dict[str, RoomSequence] = {}
+        self._offset_listeners: dict[str, list[Callable[[float, float], Awaitable[None]]]] = {}
         self.last_unlock: dict[int, dict[str, Any]] = {}  # contract_id -> {result, at, message}
         from .drift import DriftManager
 
@@ -498,6 +501,59 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
     def async_set_desired(self, zone_key: str, values: dict[str, Any]) -> None:
         self.drift.set_desired(zone_key, values)
 
+    # ---------------------------------------------------------------- target offset
+    def offset(self, zone_key: str) -> float:
+        return self.drift.offset(zone_key)
+
+    def device_target(self, zone_key: str, target: float) -> float:
+        """The setpoint driven on the AC for the HA-facing target (target + offset, clamped to the
+        AC's physical limits when those are known)."""
+        value = float(target) + self.offset(zone_key)
+        if DEVICE_MIN_SETPOINT is not None:
+            value = max(DEVICE_MIN_SETPOINT, value)
+        if DEVICE_MAX_SETPOINT is not None:
+            value = min(DEVICE_MAX_SETPOINT, value)
+        return round(round(value / TEMP_STEP) * TEMP_STEP, 2)
+
+    def from_device(self, zone_key: str, setpoint: float) -> float:
+        """The HA-facing target for a setpoint read from the AC (setpoint - offset)."""
+        return round(float(setpoint) - self.offset(zone_key), 2)
+
+    def to_device(self, zone_key: str, expected: dict[str, Any]) -> dict[str, Any]:
+        """Copy of an HA-facing expected state with the target converted to the AC setpoint."""
+        out = dict(expected)
+        if out.get(KIND_TARGET) is not None:
+            out[KIND_TARGET] = self.device_target(zone_key, out[KIND_TARGET])
+        return out
+
+    def zone_matches_target(self, zone: HvacZone, expected: dict[str, Any]) -> bool:
+        """Does the AC match an HA-facing expected state (target compared as target + offset)?"""
+        return self._zone_matches(zone, self.to_device(zone.key, expected))
+
+    @callback
+    def async_add_offset_listener(
+        self, zone_key: str, cb: Callable[[float, float], Awaitable[None]]
+    ) -> Callable[[], None]:
+        self._offset_listeners.setdefault(zone_key, []).append(cb)
+
+        def _remove() -> None:
+            listeners = self._offset_listeners.get(zone_key, [])
+            if cb in listeners:
+                listeners.remove(cb)
+
+        return _remove
+
+    async def async_set_offset(self, zone_key: str, value: float) -> float:
+        """Store a room's target offset; the room's climate entity re-drives the AC if needed."""
+        old = self.offset(zone_key)
+        new = self.drift.set_offset(zone_key, value)
+        if new != old:
+            _LOGGER.debug("%s: target offset %+.1f -> %+.1f °C", zone_key, old, new)
+            for cb in list(self._offset_listeners.get(zone_key, [])):
+                await cb(old, new)
+        self.notify_health()
+        return new
+
     @property
     def max_retries(self) -> int:
         return int(self.config_entry.options.get(CONF_MAX_RETRIES, DEFAULT_MAX_RETRIES))
@@ -633,9 +689,16 @@ class MsheirebCoordinator(DataUpdateCoordinator[MsheirebData]):
         set_desired: bool = True,
         fan_if_differs: bool = False,
     ) -> list[dict[str, Any]]:
-        """Execute + track a command. Caller holds the contract command lock."""
+        """Execute + track a command. Caller holds the contract command lock.
+
+        `expected` is HA-facing: its target is driven on the AC as target + the room's offset."""
         if set_desired:
             self.async_set_desired(zone.key, expected)
+        if expected.get(KIND_TARGET) is not None:
+            dev = self.device_target(zone.key, expected[KIND_TARGET])
+            if abs(dev - float(expected[KIND_TARGET])) > 0.01:
+                description = f"{description} [AC setpoint {dev:.1f}, offset {self.offset(zone.key):+.1f}]"
+        expected = self.to_device(zone.key, expected)
         sent: list[dict[str, Any]] = []
         started = time.monotonic()
         self._last_fan_press.pop(zone.key, None)

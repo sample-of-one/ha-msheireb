@@ -24,6 +24,9 @@ from .const import (
     EXT_RESTORE,
     EXT_RESTORE_NOTIFY,
     FAN_ROLES,
+    OFFSET_MAX,
+    OFFSET_MIN,
+    OFFSET_STEP,
     STORE_VERSION,
 )
 
@@ -50,6 +53,12 @@ def _differs(kind: str, want: Any, have: Any) -> bool:
     if kind == "target":
         return abs(float(want) - float(have)) > 0.01
     return want != have
+
+
+def clamp_offset(value: Any) -> float:
+    """Bound a target offset to OFFSET_MIN..OFFSET_MAX in OFFSET_STEP steps."""
+    v = round(float(value) / OFFSET_STEP) * OFFSET_STEP
+    return round(min(OFFSET_MAX, max(OFFSET_MIN, v)), 1) + 0.0  # + 0.0: no -0.0
 
 
 def describe(kind: str, value: Any) -> str:
@@ -92,6 +101,10 @@ class DriftManager:
     last_event: DriftEvent | None = None
     restoring: set[str] = field(default_factory=set)
     prev_fan: dict[str, str] = field(default_factory=dict)  # zone_key -> fan speed before HA turned it off
+    # zone_key -> target offset (°C): the AC is driven to (shown target + offset)
+    offsets: dict[str, float] = field(default_factory=dict)
+    # rooms whose offset changed while off: the new offset is applied on the next turn-on from HA
+    offset_pending: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.store = Store(self.hass, STORE_VERSION, store_key(self.coordinator.config_entry.entry_id))
@@ -102,9 +115,18 @@ class DriftManager:
         self.desired = {k: dict(v) for k, v in (data.get("desired") or {}).items()}
         self.auto_restore = {k: bool(v) for k, v in (data.get("auto_restore") or {}).items()}
         self.prev_fan = {k: str(v) for k, v in (data.get("prev_fan") or {}).items() if v}
+        self.offsets = {}
+        for k, v in (data.get("offsets") or {}).items():
+            try:
+                if clamp_offset(v):
+                    self.offsets[k] = clamp_offset(v)
+            except (TypeError, ValueError):
+                continue
+        self.offset_pending = {str(k) for k in data.get("offset_pending") or []}
 
     def _data_to_save(self) -> dict[str, Any]:
-        return {"desired": self.desired, "auto_restore": self.auto_restore, "prev_fan": self.prev_fan}
+        return {"desired": self.desired, "auto_restore": self.auto_restore, "prev_fan": self.prev_fan,
+                "offsets": self.offsets, "offset_pending": sorted(self.offset_pending)}
 
     @callback
     def _save(self) -> None:
@@ -128,9 +150,32 @@ class DriftManager:
         return bool(self._opts.get(CONF_ADOPT_EXTERNAL, DEFAULT_ADOPT_EXTERNAL))
 
     # ---------------------------------------------------------------- state
+    def offset(self, zone_key: str) -> float:
+        return self.offsets.get(zone_key, 0.0)
+
+    @callback
+    def set_offset(self, zone_key: str, value: Any) -> float:
+        value = clamp_offset(value)
+        if value:
+            self.offsets[zone_key] = value
+        else:
+            self.offsets.pop(zone_key, None)
+        self._save()
+        return value
+
+    @callback
+    def set_offset_pending(self, zone_key: str, pending: bool) -> None:
+        if pending:
+            self.offset_pending.add(zone_key)
+        else:
+            self.offset_pending.discard(zone_key)
+        self._save()
+
     @callback
     def set_desired(self, zone_key: str, values: dict[str, Any]) -> None:
         self.desired.setdefault(zone_key, {}).update(values)
+        if "target" in values:
+            self.offset_pending.discard(zone_key)  # the target is being driven with the current offset
         self.episodes.pop(zone_key, None)  # a new intent ends any drift episode
         self.coordinator.alerts.clear(f"drift_{zone_key}")
         self._save()
@@ -202,9 +247,18 @@ class DriftManager:
                         self.episodes.pop(key, None)
                     continue
                 have = actual_values(zone)
-                diff = {k: (want[k], have.get(k)) for k in KEYS_ORDER if k in want and _differs(k, want[k], have.get(k))}
+                # the desired target is the one shown in HA; the AC itself should be at target + offset.
+                # Compare at device level, but keep (and act on / adopt) the HA-facing values.
+                want_dev = self.coordinator.to_device(key, want)
+                have_user = dict(have)
+                if have.get("target") is not None:
+                    have_user["target"] = self.coordinator.from_device(key, have["target"])
+                diff = {k: (want[k], have_user.get(k)) for k in KEYS_ORDER
+                        if k in want and _differs(k, want_dev[k], have.get(k))}
                 if want.get("power") is False and have.get("power") is False:
                     diff.pop("fan", None)  # fan speed is irrelevant while the room is off
+                    if key in self.offset_pending:
+                        diff.pop("target", None)  # new offset: applied on the next turn-on from HA
                 ep = self.episodes.get(key)
                 if not diff:
                     if ep is not None:
