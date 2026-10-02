@@ -28,7 +28,7 @@ from .coordinator import MsheirebCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH, Platform.BUTTON, Platform.LOCK]
+PLATFORMS: list[Platform] = [Platform.CLIMATE, Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH, Platform.BUTTON]
 
 type MsheirebConfigEntry = ConfigEntry[MsheirebCoordinator]
 
@@ -87,6 +87,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: MsheirebConfigEntry) -> 
     for cid, cd in data.items():
         dev_reg.async_get_or_create(config_entry_id=entry.entry_id, **apartment_device(cid, cd.title))
     entry.async_on_unload(coordinator.async_cancel_pending)
+    _remove_retired_entities(hass, entry)
 
     options_snapshot = dict(entry.options)
 
@@ -111,3 +112,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: MsheirebConfigEntry) ->
 async def async_remove_entry(hass: HomeAssistant, entry: MsheirebConfigEntry) -> None:
     ir.async_delete_issue(hass, DOMAIN, f"reauth_{entry.entry_id}")
     await Store(hass, STORE_VERSION, store_key(entry.entry_id)).async_remove()
+
+
+def _remove_retired_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """0.3.13: the Door lock entity (0.3.12) and the Last unlock sensor were replaced by the Door sensor."""
+    from homeassistant.helpers import entity_registry as er
+
+    reg = er.async_get(hass)
+    for ent in er.async_entries_for_config_entry(reg, entry.entry_id):
+        if (ent.domain == "lock" and ent.unique_id.endswith("_door_lock")) or (
+            ent.domain == "sensor" and ent.unique_id.startswith(f"{entry.entry_id}_last_unlock_")
+        ):
+            _LOGGER.info("Removing retired entity %s", ent.entity_id)
+            reg.async_remove(ent.entity_id)

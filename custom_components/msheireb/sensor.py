@@ -19,9 +19,14 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import slugify
 
 from .api import AUTH_FAILED, AUTH_OK, AUTH_REFRESHING, AUTH_RELOGIN
-from .const import CMD_RESULTS, DOMAIN, INTEGRATION_VERSION
+from .const import CMD_RESULTS, DOMAIN, INTEGRATION_VERSION, UNLOCK_DURATION
 from .coordinator import MsheirebCoordinator
+from .door import DOOR_FAILED, DOOR_LOCKED, DOOR_OPEN, DOOR_STATES, DOOR_UNLOCKING
 from .entity import room_device, room_entity_id, zone_needs_disambiguation
+
+
+DOOR_ICONS = {DOOR_LOCKED: "mdi:lock", DOOR_UNLOCKING: "mdi:lock-clock", DOOR_OPEN: "mdi:door-open",
+              DOOR_FAILED: "mdi:lock-alert"}
 
 
 def account_device(coordinator: MsheirebCoordinator) -> DeviceInfo:
@@ -156,29 +161,60 @@ class LastCommandSensor(HealthEntity, SensorEntity):
         return rec.as_attributes() if rec else None
 
 
-class LastUnlockSensor(HealthEntity, SensorEntity):
-    """Result of the last door unlock sent from Home Assistant."""
+class DoorSensor(SensorEntity):
+    """Door: locked / unlocking / open / failed, driven by the unlock button (portal-like feedback).
 
+    The state comes from the door state machine only, so coordinator polls never overwrite a
+    transient state; every transition is written immediately.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = ["success", "failed"]
+    _attr_options = DOOR_STATES
+    _attr_translation_key = "door"
 
     def __init__(self, coordinator: MsheirebCoordinator, contract_id: int, title: str) -> None:
         from .entity import apartment_device
 
-        super().__init__(coordinator, f"last_unlock_{contract_id}")
-        self._attr_translation_key = "last_unlock"
+        self.coordinator = coordinator
         self._contract_id = contract_id
+        self._attr_unique_id = f"{contract_id}_door"
         self._attr_device_info = apartment_device(contract_id, title)
 
-    @property
-    def native_value(self) -> str | None:
-        rec = self.coordinator.last_unlock.get(self._contract_id)
-        return rec["result"] if rec else None
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(self.coordinator.door.async_add_listener(self.async_write_ha_state))
+        self.async_on_remove(self.coordinator.async_add_listener(self._lock_status_updated))
+
+    @callback
+    def _lock_status_updated(self) -> None:
+        self.async_write_ha_state()  # attributes (lock status) only; the state is the door's
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        rec = self.coordinator.last_unlock.get(self._contract_id)
-        return {k: v for k, v in rec.items() if k != "result"} if rec else None
+    def native_value(self) -> str:
+        return self.coordinator.door.get(self._contract_id).state
+
+    @property
+    def icon(self) -> str:
+        return DOOR_ICONS.get(self.native_value, "mdi:lock")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        cd = (self.coordinator.data or {}).get(self._contract_id)
+        locks = ((cd.lock or {}).get("locks") or []) if cd else []
+        first = locks[0] if locks else {}
+        status = first.get("current_lock_status") or {}
+        last = self.coordinator.last_unlock.get(self._contract_id) or {}
+        return {
+            "last_result": last.get("result"),
+            "last_unlock_at": last.get("at"),
+            "unlock_duration": last.get("duration", UNLOCK_DURATION),
+            "message": last.get("message"),
+            "problem": self.coordinator.door.get(self._contract_id).problem,
+            "lock_connected": status.get("connected"),
+            "lock_outdated": status.get("outdated"),
+            "low_battery": first.get("low_battery"),
+        }
 
 
 async def async_setup_entry(
@@ -192,10 +228,10 @@ async def async_setup_entry(
     def _add_new() -> None:
         new = []
         for cid, cd in (coordinator.data or {}).items():
-            if (cd.lock or {}).get("locks") and f"unlock_{cid}" not in known:
-                known.add(f"unlock_{cid}")
-                ent = LastUnlockSensor(coordinator, cid, cd.title)
-                ent.entity_id = "sensor." + slugify(f"msheireb {cd.title} last unlock")
+            if (cd.lock or {}).get("locks") and f"door_{cid}" not in known:
+                known.add(f"door_{cid}")
+                ent = DoorSensor(coordinator, cid, cd.title)
+                ent.entity_id = "sensor." + slugify(f"msheireb {cd.title} door")
                 new.append(ent)
             for zone in sorted(cd.zones.values(), key=lambda z: z.sort_key):
                 if zone.key not in known:
