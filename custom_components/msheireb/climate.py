@@ -101,7 +101,8 @@ class MsheirebClimate(MsheirebEntity, ClimateEntity):
         self._fan_roles = tuple(r for r in FAN_ROLES if r in zone.controls)
         # 'off' first (when the room has a power control): choosing it turns the room off
         self._fan_off = bool(self._fan_roles) and ROLE_POWER in zone.controls
-        self._attr_fan_modes = ([FAN_OFF] if self._fan_off else []) + list(self._fan_roles)
+        # display order: Off, Low, Medium, High, Auto
+        self._attr_fan_modes = ([FAN_OFF] if self._fan_off else []) + [r for r in self._fan_roles if r != ROLE_FAN_AUTO] + [r for r in self._fan_roles if r == ROLE_FAN_AUTO]
         features = ClimateEntityFeature.TARGET_TEMPERATURE
         if self._fan_roles:
             features |= ClimateEntityFeature.FAN_MODE

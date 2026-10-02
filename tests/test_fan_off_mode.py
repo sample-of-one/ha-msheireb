@@ -25,7 +25,7 @@ def _attrs(hass):
 
 async def test_fan_modes_list_has_off_first(hass):
     await _setup(hass)
-    assert hass.states.get(DINING).attributes["fan_modes"] == ["off", "auto", "low", "medium", "high"]
+    assert hass.states.get(DINING).attributes["fan_modes"] == ["off", "low", "medium", "high", "auto"]
 
 
 async def test_fan_off_turns_room_off_like_hvac_off(hass):
