@@ -49,7 +49,7 @@ The apartment device has an **Unlock door** button (the only control, opt-in) an
 |---|---|---|
 | `locked` | `mdi:lock` | Normal state. |
 | `unlocking` | `mdi:lock-clock` | Shown as soon as the button is pressed, while the request and then the lock status re-read are pending (the portal waits for both). Shown for at least ~2 s so it is visible even if the portal answers faster. |
-| `unlocked` | `mdi:lock-open-variant` | From ~1.5 s after the portal accepts (the lock needs a moment to release), for 6 s, matching the real lock. |
+| `unlocked` | `mdi:lock-open-variant` | From ~1.5 s after the portal accepts (the lock needs a moment to release), for the portal unlock duration + 1 s (5 + 1 = 6 s), matching the real lock. |
 | `failed` | `mdi:lock-alert` | For ~10 s if the portal refused or could not be reached, with the portal's message in `message`/`problem`; then `locked`. |
 
 - **No real lock state:** the portal's lock status endpoint reports only *connected*, *outdated* and *low battery*, not locked/unlocked/open. So *unlocked* is based on the accepted request plus those timings, the same success condition the portal uses.

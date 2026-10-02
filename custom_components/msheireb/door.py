@@ -6,7 +6,7 @@ success, a refetch of GET /smart-lock/contract-status/{id} (awaited in onSuccess
 does not fail the unlock). No timer, websocket or push event is involved, and the status endpoint
 reports only connected/outdated/low_battery, not locked/open. So: success = the POST returned 2xx.
 HA shows 'unlocking' for at least MIN_UNLOCKING s (so it is visible), until UNLOCKED_DELAY after the portal accepts,
-then 'unlocked' for UNLOCKED_FOR s (matching the real lock), then 'locked'.
+then 'unlocked' for the portal duration + UNLOCKED_EXTRA s (matching the real lock), then 'locked'.
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ DOOR_OPEN = "unlocked"
 DOOR_FAILED = "failed"
 DOOR_STATES = [DOOR_LOCKED, DOOR_UNLOCKING, DOOR_OPEN, DOOR_FAILED]
 UNLOCKED_DELAY = 1.5  # s: the real lock takes ~1.5 s to release after the portal accepts
-UNLOCKED_FOR = 6.0  # s: how long the real lock stays unlocked
+UNLOCKED_EXTRA = 1.0  # s: the real lock stays unlocked ~1 s past the portal duration
 MIN_UNLOCKING = 2.0  # s: 'unlocking' stays visible at least this long, even if the portal is faster
 FAILED_HOLD = 10.0  # s: 'failed' is shown this long, then back to 'locked'
 
@@ -157,7 +157,7 @@ class DoorManager:
             _LOGGER.debug("Lock status refresh after unlock failed: %s", err)
         _LOGGER.info("Door unlock accepted by the portal")
         self._fire(contract_id, "success", duration, None, source, entity_id)
-        open_for = UNLOCKED_FOR
+        open_for = duration_seconds(duration) + UNLOCKED_EXTRA
         relock = lambda: self._later(contract_id, open_for, DOOR_LOCKED)  # noqa: E731
         wait = max(MIN_UNLOCKING - (time.monotonic() - started), UNLOCKED_DELAY)
         if wait > 0:
